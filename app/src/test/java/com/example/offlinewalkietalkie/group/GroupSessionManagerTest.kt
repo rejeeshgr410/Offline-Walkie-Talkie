@@ -353,7 +353,8 @@ class GroupSessionManagerTest {
 
         a.manager.onConnectionRequest(
             "EP_STRANGER",
-            GroupAdvert("OTHERGRP", "ZZZZ", GroupRole.MEMBER, "Stranger")
+            GroupAdvert("OTHERGRP", "ZZZZ", GroupRole.MEMBER, "Stranger"),
+            "4242"
         )
 
         val stranger = a.manager.state.value.member("ZZZZ")
@@ -368,7 +369,8 @@ class GroupSessionManagerTest {
         val a = sim.nodeOf("AAAA")
         a.manager.onConnectionRequest(
             "EP_STRANGER",
-            GroupAdvert("OTHERGRP", "ZZZZ", GroupRole.MEMBER, "Stranger")
+            GroupAdvert("OTHERGRP", "ZZZZ", GroupRole.MEMBER, "Stranger"),
+            "4242"
         )
         a.manager.respondToRequest("ZZZZ", accept = false)
         assertNull(a.manager.state.value.member("ZZZZ"))

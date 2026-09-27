@@ -2,7 +2,7 @@ package com.example.offlinewalkietalkie.group
 
 /** Where a member sits in the group. */
 enum class GroupRole {
-    /** Owns the roster and vouches for who is allowed in. Exactly one per group. */
+    /** Owns the roster and admits newcomers. Exactly one per group. */
     COORDINATOR,
     MEMBER
 }
@@ -15,19 +15,25 @@ enum class MemberState {
     /** Advertising our group id but no link attempted yet. */
     DISCOVERED,
 
-    /** We are the initiator and a connection is in flight. */
+    /** A link is being opened. */
     CONNECTING,
 
-    /** They asked us; waiting for the local user (or auto-accept) to answer. */
+    /**
+     * A first-time link that a person has to confirm by comparing the code shown on both
+     * phones. Nothing about the group is trusted until they do.
+     */
     PENDING_APPROVAL,
 
-    /** Link is up and the key exchange finished. Voice can flow. */
+    /** Link is up; waiting for the peer to prove it holds the group secret. */
+    VERIFYING,
+
+    /** Link is up and membership is proven. Voice can flow. */
     CONNECTED,
 
     /** Link dropped but the member is still on the roster; retry is scheduled. */
     RECONNECTING,
 
-    /** Attempts exhausted, or the peer refused. Surfaced to the user with a reason. */
+    /** Attempts exhausted, verification failed, or the peer refused. Carries a reason. */
     FAILED,
 
     /** Left deliberately. Kept briefly so the UI can show it rather than blink out. */
@@ -42,6 +48,7 @@ val MemberState.isLive: Boolean
 val MemberState.isTransitional: Boolean
     get() = this == MemberState.CONNECTING ||
         this == MemberState.PENDING_APPROVAL ||
+        this == MemberState.VERIFYING ||
         this == MemberState.RECONNECTING
 
 data class GroupMember(
@@ -53,6 +60,14 @@ data class GroupMember(
     val state: MemberState = MemberState.DISCOVERED,
     /** False when we reach them through a relay rather than our own radio link. */
     val isDirect: Boolean = true,
+    /** No direct link, but a live neighbour of ours can reach them, so voice still gets there. */
+    val reachableViaRelay: Boolean = false,
+    /** Listed in the coordinator's roster, which is what lets later links skip the human check. */
+    val onRoster: Boolean = false,
+    /** The code both phones display for this link; compared by people on first contact. */
+    val authCode: String? = null,
+    /** A person confirmed [authCode] for the current link. */
+    val humanVerified: Boolean = false,
     val failureReason: String? = null,
     val attempts: Int = 0,
     val lastSeenEpochMs: Long = 0L
@@ -87,6 +102,11 @@ data class GroupState(
     val group: GroupIdentity? = null,
     val localMemberId: String = "",
     val members: List<GroupMember> = emptyList(),
+    /**
+     * memberId -> the members it has a verified direct link to, as last reported in its
+     * heartbeat (our own entry is kept current locally). Drives relay decisions.
+     */
+    val neighbors: Map<String, Set<String>> = emptyMap(),
     /** Set while forming or joining, cleared once at least one link is live. */
     val isForming: Boolean = false,
     val lastError: String? = null
@@ -103,17 +123,26 @@ data class GroupState(
 
     val connected: List<GroupMember> get() = others.filter { it.state.isLive }
 
+    val relayed: List<GroupMember> get() = others.filter { !it.state.isLive && it.reachableViaRelay }
+
     val pending: List<GroupMember> get() = others.filter { it.state.isTransitional }
+
+    val awaitingApproval: List<GroupMember>
+        get() = others.filter { it.state == MemberState.PENDING_APPROVAL }
 
     val failed: List<GroupMember> get() = others.filter { it.state == MemberState.FAILED }
 
     val coordinator: GroupMember? get() = members.find { it.memberId == group?.coordinatorId }
 
-    /** Us plus everyone we can actually talk to. */
-    val liveMemberCount: Int get() = connected.size + 1
+    /** Us plus everyone voice can reach, directly or through a relay. */
+    val liveMemberCount: Int get() = connected.size + relayed.size + 1
 
     fun member(memberId: String): GroupMember? = members.find { it.memberId == memberId }
 
     fun memberByEndpoint(endpointId: String): GroupMember? =
         members.find { it.endpointId == endpointId }
+
+    /** Only verified members may carry voice, text or control traffic. */
+    fun isTrustedEndpoint(endpointId: String): Boolean =
+        memberByEndpoint(endpointId)?.state == MemberState.CONNECTED
 }

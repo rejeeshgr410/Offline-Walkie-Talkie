@@ -9,12 +9,19 @@ package com.example.offlinewalkietalkie.group
  */
 sealed class GroupMessage {
 
-    /** Coordinator -> joiner: you are in, here is the group. */
+    /**
+     * Coordinator -> joiner, sent only after a person confirmed the link code on both
+     * phones. Carries the group secret that later links use to prove membership without
+     * another human check. Nearby encrypts every payload on an accepted connection, and
+     * the confirmed code rules out a man in the middle, so this is the one safe moment to
+     * hand the secret over.
+     */
     data class Welcome(
         val groupId: String,
         val groupName: String,
         val coordinatorId: String,
-        val epoch: Int
+        val epoch: Int,
+        val secretHex: String
     ) : GroupMessage()
 
     /** Joiner -> coordinator: requesting membership. */
@@ -33,10 +40,15 @@ sealed class GroupMessage {
         val entries: List<RosterEntry>
     ) : GroupMessage()
 
-    /** Liveness beacon. Absence of these is what triggers a failover. */
+    /**
+     * Liveness beacon. Absence of these is what triggers a failover. [neighbors] lists the
+     * members the sender has a verified direct link to, so every device can work out who
+     * needs a relay to be reached.
+     */
     data class Heartbeat(
         val memberId: String,
-        val epoch: Int
+        val epoch: Int,
+        val neighbors: List<String> = emptyList()
     ) : GroupMessage()
 
     /**
@@ -53,8 +65,17 @@ sealed class GroupMessage {
     /** Deliberate departure, so peers can drop the member without waiting for a timeout. */
     data class Leave(val memberId: String) : GroupMessage()
 
+    /**
+     * Proof that the sender holds the group secret, bound to this one link's Nearby code
+     * so it cannot be replayed or relayed onto a different connection.
+     */
+    data class MembershipProof(
+        val memberId: String,
+        val proofHex: String
+    ) : GroupMessage()
+
     fun encode(): ByteArray = when (this) {
-        is Welcome -> join(T_WELCOME, groupId, groupName, coordinatorId, epoch.toString())
+        is Welcome -> join(T_WELCOME, groupId, groupName, coordinatorId, epoch.toString(), secretHex)
         is JoinRequest -> join(T_JOIN, memberId, displayName)
         is Roster -> join(
             T_ROSTER,
@@ -62,15 +83,17 @@ sealed class GroupMessage {
             epoch.toString(),
             entries.joinToString(ENTRY_SEP) { it.encode() }
         )
-        is Heartbeat -> join(T_HEARTBEAT, memberId, epoch.toString())
+        is Heartbeat -> join(T_HEARTBEAT, memberId, epoch.toString(), neighbors.joinToString(ENTRY_SEP))
         is CoordinatorClaim -> join(T_CLAIM, memberId, groupId, epoch.toString())
         is Leave -> join(T_LEAVE, memberId)
+        is MembershipProof -> join(T_PROOF, memberId, proofHex)
     }.toByteArray(Charsets.UTF_8)
 
     companion object {
-        private const val SEP = ""
-        private const val ENTRY_SEP = ""
-        private const val FIELD_SEP = ""
+        // ASCII unit/record/group separators: never typed by users, so names cannot collide.
+        private const val SEP = "\u001F"
+        private const val ENTRY_SEP = "\u001E"
+        private const val FIELD_SEP = "\u001D"
 
         private const val T_WELCOME = "W"
         private const val T_JOIN = "J"
@@ -78,8 +101,12 @@ sealed class GroupMessage {
         private const val T_HEARTBEAT = "H"
         private const val T_CLAIM = "C"
         private const val T_LEAVE = "L"
+        private const val T_PROOF = "P"
 
         private fun join(vararg parts: String) = parts.joinToString(SEP)
+
+        private fun splitList(text: String): List<String> =
+            text.split(ENTRY_SEP).filter { it.isNotBlank() }
 
         fun decode(bytes: ByteArray): GroupMessage? {
             val text = try {
@@ -92,11 +119,12 @@ sealed class GroupMessage {
 
             return try {
                 when (parts[0]) {
-                    T_WELCOME -> if (parts.size < 5) null else Welcome(
+                    T_WELCOME -> if (parts.size < 6) null else Welcome(
                         groupId = parts[1],
                         groupName = parts[2],
                         coordinatorId = parts[3],
-                        epoch = parts[4].toInt()
+                        epoch = parts[4].toInt(),
+                        secretHex = parts[5]
                     )
                     T_JOIN -> if (parts.size < 3) null else JoinRequest(
                         memberId = parts[1],
@@ -105,14 +133,12 @@ sealed class GroupMessage {
                     T_ROSTER -> if (parts.size < 4) null else Roster(
                         groupId = parts[1],
                         epoch = parts[2].toInt(),
-                        entries = parts[3]
-                            .split(ENTRY_SEP)
-                            .filter { it.isNotBlank() }
-                            .mapNotNull { RosterEntry.decode(it, FIELD_SEP) }
+                        entries = splitList(parts[3]).mapNotNull { RosterEntry.decode(it, FIELD_SEP) }
                     )
                     T_HEARTBEAT -> if (parts.size < 3) null else Heartbeat(
                         memberId = parts[1],
-                        epoch = parts[2].toInt()
+                        epoch = parts[2].toInt(),
+                        neighbors = if (parts.size >= 4) splitList(parts[3]) else emptyList()
                     )
                     T_CLAIM -> if (parts.size < 4) null else CoordinatorClaim(
                         memberId = parts[1],
@@ -120,6 +146,10 @@ sealed class GroupMessage {
                         epoch = parts[3].toInt()
                     )
                     T_LEAVE -> if (parts.size < 2) null else Leave(memberId = parts[1])
+                    T_PROOF -> if (parts.size < 3) null else MembershipProof(
+                        memberId = parts[1],
+                        proofHex = parts[2]
+                    )
                     else -> null
                 }
             } catch (e: NumberFormatException) {

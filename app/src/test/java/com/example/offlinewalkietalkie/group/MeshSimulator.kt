@@ -5,8 +5,9 @@ package com.example.offlinewalkietalkie.group
  * other. Physical multi-device testing needs one phone per node; this exercises the same
  * logic for 2, 3, 4, 5+ nodes deterministically.
  *
- * Models the real Nearby handshake shape: connect() raises a request on the far side,
- * and both sides only see onConnected once that side accepts.
+ * Models the real Nearby handshake: connect() raises a request with the same code on
+ * BOTH ends, and the link only comes up once both ends have accepted. Radio range is
+ * modelled too, so relay paths can be tested.
  */
 class MeshSimulator(private val clock: TestClock = TestClock()) {
 
@@ -21,6 +22,7 @@ class MeshSimulator(private val clock: TestClock = TestClock()) {
 
         val connectCalls = mutableListOf<String>()
         val acceptCalls = mutableListOf<String>()
+        val rejectCalls = mutableListOf<String>()
         val sentControl = mutableListOf<Pair<String, ByteArray>>()
 
         val endpointId: String get() = endpointFor(memberId)
@@ -28,16 +30,20 @@ class MeshSimulator(private val clock: TestClock = TestClock()) {
         val port = object : GroupTransportPort {
             override suspend fun connect(endpointId: String) {
                 connectCalls.add(endpointId)
-                deliverConnectRequest(this@Node, endpointId)
+                openPending(this@Node, endpointId)
             }
 
             override suspend fun acceptConnection(endpointId: String) {
                 acceptCalls.add(endpointId)
-                completeConnection(this@Node, endpointId)
+                accept(this@Node, endpointId)
             }
 
             override suspend fun rejectConnection(endpointId: String) {
-                links.remove(linkKey(this@Node.endpointId, endpointId))
+                rejectCalls.add(endpointId)
+                if (pending.remove(linkKey(this@Node.endpointId, endpointId)) != null) {
+                    nodeByEndpoint(endpointId)?.manager
+                        ?.onConnectionFailed(this@Node.endpointId, "The other phone declined")
+                }
             }
 
             override suspend fun disconnect(endpointId: String) {
@@ -59,8 +65,15 @@ class MeshSimulator(private val clock: TestClock = TestClock()) {
         }
     }
 
+    private class PendingLink(val code: String, val accepted: MutableSet<String> = mutableSetOf())
+
     private val nodes = linkedMapOf<String, Node>()
     private val links = mutableSetOf<String>()
+    private val pending = mutableMapOf<String, PendingLink>()
+    private var codeCounter = 1000
+
+    /** Pairs that cannot hear each other. Everyone is in range unless listed here. */
+    private val outOfRange = mutableSetOf<String>()
 
     fun endpointFor(memberId: String) = "EP_$memberId"
 
@@ -81,6 +94,15 @@ class MeshSimulator(private val clock: TestClock = TestClock()) {
         return node
     }
 
+    fun setOutOfRange(a: String, b: String) {
+        outOfRange.add(pairKey(a, b))
+    }
+
+    private fun pairKey(a: String, b: String) = listOf(a, b).sorted().joinToString("~")
+
+    private fun inRange(a: Node, b: Node) =
+        a.reachable && b.reachable && pairKey(a.memberId, b.memberId) !in outOfRange
+
     private fun nodeByEndpoint(endpointId: String): Node? =
         nodes.values.find { it.endpointId == endpointId }
 
@@ -91,54 +113,88 @@ class MeshSimulator(private val clock: TestClock = TestClock()) {
 
     fun linkCount() = links.size
 
-    /** Every reachable node sees every other reachable node's advert. */
+    /** The code Nearby showed both phones for the pending or live link between two nodes. */
+    fun codeFor(a: String, b: String): String? = pending[linkKey(endpointFor(a), endpointFor(b))]?.code
+
+    /** Every node sees the adverts of the nodes in range of it. */
     suspend fun discoverAll() {
-        val visible = nodes.values.filter { it.reachable }
-        for (observer in visible) {
-            for (target in visible) {
+        for (observer in nodes.values) {
+            for (target in nodes.values) {
                 if (observer.memberId == target.memberId) continue
+                if (!inRange(observer, target)) continue
                 val advert = target.advert ?: continue
                 observer.manager.onEndpointDiscovered(target.endpointId, advert)
             }
         }
     }
 
-    private suspend fun deliverConnectRequest(from: Node, toEndpointId: String) {
+    /** Both ends learn about the request, with the same code, exactly like Nearby. */
+    private suspend fun openPending(from: Node, toEndpointId: String) {
         val target = nodeByEndpoint(toEndpointId) ?: return
-        if (!target.reachable || !from.reachable) return
-        target.manager.onConnectionRequest(from.endpointId, from.advert)
+        if (!inRange(from, target)) return
+        val key = linkKey(from.endpointId, target.endpointId)
+        if (key in links || key in pending) return
+        val code = (codeCounter++).toString()
+        pending[key] = PendingLink(code)
+        target.manager.onConnectionRequest(from.endpointId, from.advert, code)
+        from.manager.onConnectionRequest(target.endpointId, target.advert, code)
     }
 
-    private suspend fun completeConnection(accepter: Node, initiatorEndpointId: String) {
-        val initiator = nodeByEndpoint(initiatorEndpointId) ?: return
-        if (!initiator.reachable || !accepter.reachable) return
-        val key = linkKey(accepter.endpointId, initiator.endpointId)
-        if (!links.add(key)) return
-        initiator.manager.onConnected(accepter.endpointId)
-        accepter.manager.onConnected(initiator.endpointId)
+    private suspend fun accept(accepter: Node, otherEndpointId: String) {
+        val other = nodeByEndpoint(otherEndpointId) ?: return
+        val key = linkKey(accepter.endpointId, other.endpointId)
+        val link = pending[key] ?: return
+        link.accepted.add(accepter.memberId)
+        if (!link.accepted.containsAll(listOf(accepter.memberId, other.memberId))) return
+        if (!inRange(accepter, other)) return
+        pending.remove(key)
+        links.add(key)
+        other.manager.onConnected(accepter.endpointId)
+        accepter.manager.onConnected(other.endpointId)
     }
 
     private suspend fun breakLink(from: Node, toEndpointId: String) {
         val target = nodeByEndpoint(toEndpointId) ?: return
-        if (!links.remove(linkKey(from.endpointId, target.endpointId))) return
+        val key = linkKey(from.endpointId, target.endpointId)
+        pending.remove(key)
+        if (!links.remove(key)) return
         target.manager.onDisconnected(from.endpointId)
+        from.manager.onDisconnected(target.endpointId)
     }
 
     private suspend fun deliverControl(from: Node, toEndpointId: String, payload: ByteArray) {
         val target = nodeByEndpoint(toEndpointId) ?: return
-        if (!target.reachable || !from.reachable) return
+        if (!inRange(from, target)) return
         if (!links.contains(linkKey(from.endpointId, target.endpointId))) return
         val message = GroupMessage.decode(payload) ?: return
         target.manager.onControlMessage(from.endpointId, message)
+    }
+
+    /**
+     * The people holding the phones compare the code on each pending first-contact link
+     * and tap Accept. Only codes that genuinely match on both ends get accepted.
+     */
+    suspend fun approveAll() {
+        for (node in nodes.values) {
+            val waiting = node.manager.state.value.awaitingApproval
+            for (member in waiting) {
+                val otherNode = nodes[member.memberId] ?: continue
+                val shownHere = member.authCode
+                val shownThere = otherNode.manager.state.value.member(node.memberId)?.authCode
+                if (shownHere != null && shownHere == shownThere) {
+                    node.manager.respondToRequest(member.memberId, accept = true)
+                }
+            }
+        }
     }
 
     /** Simulate a device dropping off: every link to it fails on both sides. */
     suspend fun killNode(memberId: String) {
         val node = nodes[memberId] ?: return
         node.reachable = false
-        val peers = nodes.values.filter { it.memberId != memberId }
-        for (peer in peers) {
+        for (peer in nodes.values.filter { it.memberId != memberId }) {
             val key = linkKey(node.endpointId, peer.endpointId)
+            pending.remove(key)
             if (links.remove(key)) {
                 peer.manager.onDisconnected(node.endpointId)
             }
@@ -149,11 +205,12 @@ class MeshSimulator(private val clock: TestClock = TestClock()) {
         nodes[memberId]?.reachable = true
     }
 
-    /** Advance time and let every node run its timers, repeatedly. */
-    suspend fun settle(rounds: Int = 6, advanceMs: Long = 0) {
+    /** Advance time, let people confirm codes, and let every node run its timers. */
+    suspend fun settle(rounds: Int = 6, advanceMs: Long = 0, autoApprove: Boolean = true) {
         repeat(rounds) {
             if (advanceMs > 0) clock.advance(advanceMs)
             discoverAll()
+            if (autoApprove) approveAll()
             nodes.values.filter { it.reachable }.forEach { it.manager.tick() }
         }
     }

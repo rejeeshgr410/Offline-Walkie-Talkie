@@ -189,7 +189,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             if (advert != null) {
                 // Group-aware path: same-group peers are admitted without a per-link prompt,
                 // which is what makes more than two devices workable.
-                groupManager.onConnectionRequest(request.peerId, advert)
+                groupManager.onConnectionRequest(request.peerId, advert, request.authCode)
             } else {
                 // Peer on an older build with no advert: fall back to manual confirmation.
                 _pendingRequest.value = request

@@ -1,5 +1,6 @@
 package com.example.offlinewalkietalkie.group
 
+import com.example.offlinewalkietalkie.group.GroupProof.toHex
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,6 +13,7 @@ interface GroupTransportPort {
     suspend fun rejectConnection(endpointId: String)
     suspend fun disconnect(endpointId: String)
     suspend fun sendControl(endpointId: String, payload: ByteArray)
+
     /** Republish who we are, so peers see our group id and role in discovery. */
     suspend fun publishAdvert(advert: GroupAdvert)
 
@@ -25,8 +27,17 @@ interface GroupTransportPort {
 /**
  * Owns group membership and the connection state machine for every peer.
  *
+ * Trust model:
+ * - The first link into a group (joiner <-> coordinator) must be confirmed by people on
+ *   both phones comparing the code Nearby shows. Only then does the coordinator hand over
+ *   the group secret.
+ * - Every later link between rostered members proves the secret with [GroupProof] instead
+ *   of asking a person again. A stranger copying the public advert has no secret and
+ *   never gets past VERIFYING.
+ * - Control messages are only acted on from verified links.
+ *
  * Deliberately free of Android and coroutine-timer dependencies: time enters through
- * [tick] and randomness through the id factory, so multi-node scenarios are reproducible
+ * [tick] and randomness through the factories, so multi-node scenarios are reproducible
  * in unit tests.
  */
 class GroupSessionManager(
@@ -34,13 +45,17 @@ class GroupSessionManager(
     private val localDisplayName: String,
     localMemberId: String? = null,
     private val now: () -> Long = System::currentTimeMillis,
-    private val idFactory: (Int) -> String = { len -> randomId(len) }
+    private val idFactory: (Int) -> String = { len -> randomId(len) },
+    private val secretFactory: () -> ByteArray = { GroupProof.newSecret() }
 ) {
     companion object {
         const val CONNECT_TIMEOUT_MS = 15_000L
         const val RETRY_BACKOFF_MS = 3_000L
         const val MAX_ATTEMPTS = 3
         const val HEARTBEAT_INTERVAL_MS = 3_000L
+
+        /** A person has this long to compare codes before the request is dropped. */
+        const val APPROVAL_TIMEOUT_MS = 60_000L
 
         /** Four missed beats before we consider the coordinator gone. */
         const val COORDINATOR_TIMEOUT_MS = 12_000L
@@ -56,11 +71,23 @@ class GroupSessionManager(
     private val _state = MutableStateFlow(GroupState(localMemberId = this.localMemberId))
     val state: StateFlow<GroupState> = _state.asStateFlow()
 
+    /** Shared by every member once admitted; never leaves an accepted, code-checked link. */
+    private var groupSecret: ByteArray? = null
+
     /** memberId -> when the in-flight connection attempt started. */
     private val attemptStartedAt = mutableMapOf<String, Long>()
 
+    /** memberId -> when we started waiting for a person to confirm the code. */
+    private val approvalStartedAt = mutableMapOf<String, Long>()
+
     /** memberId -> earliest time a retry may fire. */
     private val retryNotBefore = mutableMapOf<String, Long>()
+
+    /** Members whose link is up at the radio level (not necessarily verified yet). */
+    private val linkUp = mutableSetOf<String>()
+
+    /** Members that proved the group secret on their current link. */
+    private val proofAccepted = mutableSetOf<String>()
 
     private var lastCoordinatorBeatAt = 0L
     private var lastHeartbeatSentAt = 0L
@@ -71,10 +98,14 @@ class GroupSessionManager(
      */
     private var hasSyncedWithCoordinator = false
 
+    val holdsGroupSecret: Boolean get() = groupSecret != null
+
     // ---------------------------------------------------------------- group lifecycle
 
     /** Become the coordinator of a brand new group. */
     suspend fun createGroup(name: String) {
+        resetLinkTracking()
+        groupSecret = secretFactory()
         val group = GroupIdentity(
             groupId = idFactory(GroupAdvert.GROUP_ID_LENGTH),
             name = name,
@@ -86,6 +117,7 @@ class GroupSessionManager(
             displayName = localDisplayName,
             role = GroupRole.COORDINATOR,
             state = MemberState.CONNECTED,
+            onRoster = true,
             lastSeenEpochMs = now()
         )
         _state.value = GroupState(
@@ -100,10 +132,12 @@ class GroupSessionManager(
     }
 
     /**
-     * Join a group we saw in discovery. The link to the coordinator is opened here; the
-     * roster and the rest of the mesh follow once it is up.
+     * Join a group we saw in discovery. The link to the coordinator is opened here; it
+     * stays unverified until people on both phones confirm the code.
      */
     suspend fun joinGroup(advert: GroupAdvert, endpointId: String) {
+        resetLinkTracking()
+        groupSecret = null
         val group = GroupIdentity(
             groupId = advert.groupId,
             name = advert.displayName,
@@ -115,13 +149,14 @@ class GroupSessionManager(
             displayName = localDisplayName,
             role = GroupRole.MEMBER,
             state = MemberState.CONNECTED,
+            onRoster = true,
             lastSeenEpochMs = now()
         )
         val target = GroupMember(
             memberId = advert.memberId,
             displayName = advert.displayName,
             endpointId = endpointId,
-            role = advert.role,
+            role = GroupRole.COORDINATOR,
             state = MemberState.CONNECTING,
             lastSeenEpochMs = now()
         )
@@ -146,9 +181,9 @@ class GroupSessionManager(
             member.endpointId?.let { runCatchingSend(it, payload) }
         }
         snapshot.others.mapNotNull { it.endpointId }.forEach { transport.disconnect(it) }
-        attemptStartedAt.clear()
-        retryNotBefore.clear()
+        resetLinkTracking()
         transport.clearAdvert()
+        groupSecret = null
         hasSyncedWithCoordinator = false
         _state.value = GroupState(localMemberId = localMemberId)
     }
@@ -165,16 +200,17 @@ class GroupSessionManager(
         if (advert.groupId != group.groupId) return
         if (advert.memberId == localMemberId) return
 
-        val existing = snapshot.member(advert.memberId)
-        if (existing?.state?.isLive == true) return
+        // Advertising our group id proves nothing — anyone can copy it. Only members the
+        // coordinator admitted are worth tracking; everyone else must come in by request.
+        val existing = snapshot.member(advert.memberId) ?: return
+        if (!existing.onRoster) return
+        if (existing.state.isLive || existing.state.isTransitional) return
 
-        updateMember(advert.memberId) { current ->
-            (current ?: GroupMember(advert.memberId, advert.displayName)).copy(
+        updateMember(advert.memberId) {
+            it?.copy(
                 displayName = advert.displayName,
                 endpointId = endpointId,
                 role = advert.role,
-                state = if (current?.state == MemberState.FAILED) MemberState.FAILED
-                else current?.state ?: MemberState.DISCOVERED,
                 lastSeenEpochMs = now()
             )
         }
@@ -184,57 +220,90 @@ class GroupSessionManager(
     fun onEndpointLost(endpointId: String) {
         val member = _state.value.memberByEndpoint(endpointId) ?: return
         if (member.state.isLive) return
-        if (member.state == MemberState.DISCOVERED) {
+        if (member.state == MemberState.DISCOVERED && !member.onRoster) {
             removeMember(member.memberId)
         }
     }
 
     /**
-     * Someone is dialling us. Members of our own group are let straight in — asking a
-     * user to confirm every pairwise link is what made 3+ devices unusable. Strangers
-     * still need an explicit decision.
+     * Nearby raises this on BOTH ends of every new connection, with the same [authCode].
+     *
+     * A rostered member is let in straight away and then has to prove the group secret.
+     * Anyone else — a joiner on first contact, or a stranger — waits for a person to
+     * compare the code.
      */
-    suspend fun onConnectionRequest(endpointId: String, advert: GroupAdvert?) {
+    suspend fun onConnectionRequest(endpointId: String, advert: GroupAdvert?, authCode: String) {
         val snapshot = _state.value
         val group = snapshot.group
+
         if (advert == null || group == null || advert.groupId != group.groupId) {
-            if (advert != null) {
-                updateMember(advert.memberId) { current ->
-                    (current ?: GroupMember(advert.memberId, advert.displayName)).copy(
-                        endpointId = endpointId,
-                        displayName = advert.displayName,
-                        state = MemberState.PENDING_APPROVAL,
-                        lastSeenEpochMs = now()
-                    )
-                }
+            if (advert != null && advert.memberId != localMemberId) {
+                markPendingApproval(advert, endpointId, authCode)
             }
             return
         }
+        if (advert.memberId == localMemberId) {
+            // Someone is advertising our own identity back at us.
+            transport.rejectConnection(endpointId)
+            return
+        }
 
-        val known = snapshot.member(advert.memberId) != null
-        val trusted = snapshot.isCoordinator || known
+        val existing = snapshot.member(advert.memberId)
+        if (existing != null && existing.state.isLive && existing.endpointId != endpointId) {
+            // Second link claiming an identity that is already verified elsewhere: a
+            // duplicate at best, an impostor at worst. Either way, keep the one we have.
+            transport.rejectConnection(endpointId)
+            return
+        }
+
+        val canProve = groupSecret != null && existing?.onRoster == true
+        if (!canProve) {
+            markPendingApproval(advert, endpointId, authCode)
+            return
+        }
+
+        updateMember(advert.memberId) {
+            it?.copy(
+                endpointId = endpointId,
+                displayName = advert.displayName,
+                authCode = authCode,
+                humanVerified = false,
+                state = MemberState.CONNECTING,
+                lastSeenEpochMs = now()
+            )
+        }
+        linkUp.remove(advert.memberId)
+        proofAccepted.remove(advert.memberId)
+        attemptStartedAt[advert.memberId] = now()
+        transport.acceptConnection(endpointId)
+    }
+
+    private fun markPendingApproval(advert: GroupAdvert, endpointId: String, authCode: String) {
         updateMember(advert.memberId) { current ->
             (current ?: GroupMember(advert.memberId, advert.displayName)).copy(
                 endpointId = endpointId,
                 displayName = advert.displayName,
-                role = advert.role,
-                state = if (trusted) MemberState.CONNECTING else MemberState.PENDING_APPROVAL,
+                role = current?.role ?: advert.role,
+                authCode = authCode,
+                humanVerified = false,
+                state = MemberState.PENDING_APPROVAL,
                 lastSeenEpochMs = now()
             )
         }
-        if (trusted) {
-            attemptStartedAt[advert.memberId] = now()
-            transport.acceptConnection(endpointId)
-        }
+        attemptStartedAt.remove(advert.memberId)
+        approvalStartedAt[advert.memberId] = now()
     }
 
-    /** User answered a PENDING_APPROVAL prompt. */
+    /** A person compared the codes and answered. */
     suspend fun respondToRequest(memberId: String, accept: Boolean) {
         val member = _state.value.member(memberId) ?: return
         val endpointId = member.endpointId ?: return
+        approvalStartedAt.remove(memberId)
         if (accept) {
             attemptStartedAt[memberId] = now()
-            updateMember(memberId) { it?.copy(state = MemberState.CONNECTING) }
+            updateMember(memberId) {
+                it?.copy(state = MemberState.CONNECTING, humanVerified = true)
+            }
             transport.acceptConnection(endpointId)
         } else {
             transport.rejectConnection(endpointId)
@@ -243,71 +312,149 @@ class GroupSessionManager(
     }
 
     suspend fun onConnected(endpointId: String) {
-        val snapshot = _state.value
-        val member = snapshot.memberByEndpoint(endpointId) ?: return
-        attemptStartedAt.remove(member.memberId)
-        retryNotBefore.remove(member.memberId)
+        val member = _state.value.memberByEndpoint(endpointId) ?: return
+        val memberId = member.memberId
+        linkUp.add(memberId)
+        retryNotBefore.remove(memberId)
 
-        updateMember(member.memberId) {
-            it?.copy(
-                state = MemberState.CONNECTED,
-                attempts = 0,
-                failureReason = null,
-                isDirect = true,
-                lastSeenEpochMs = now()
-            )
+        if (member.humanVerified) {
+            promote(memberId)
+            val group = _state.value.group ?: return
+            if (_state.value.isCoordinator) {
+                val secret = groupSecret ?: return
+                sendControl(endpointId, GroupMessage.Welcome(
+                    groupId = group.groupId,
+                    groupName = group.name,
+                    coordinatorId = group.coordinatorId,
+                    epoch = group.epoch,
+                    secretHex = secret.toHex()
+                ))
+                broadcastRoster()
+            } else if (memberId == group.coordinatorId) {
+                lastCoordinatorBeatAt = now()
+                hasSyncedWithCoordinator = true
+                sendControl(endpointId, GroupMessage.JoinRequest(localMemberId, localDisplayName))
+            }
+            return
         }
-        _state.value = _state.value.copy(isForming = false, lastError = null)
 
-        val group = _state.value.group ?: return
-        if (_state.value.isCoordinator) {
-            // We own the roster, so the newcomer and everyone else need the update.
-            broadcastRoster()
-            sendControl(endpointId, GroupMessage.Welcome(
-                groupId = group.groupId,
-                groupName = group.name,
-                coordinatorId = group.coordinatorId,
-                epoch = group.epoch
-            ))
-        } else if (member.memberId == group.coordinatorId) {
-            lastCoordinatorBeatAt = now()
-            hasSyncedWithCoordinator = true
-            sendControl(endpointId, GroupMessage.JoinRequest(localMemberId, localDisplayName))
+        // Rostered member on a new link: both sides prove the secret before voice flows.
+        attemptStartedAt[memberId] = now()
+        updateMember(memberId) { it?.copy(state = MemberState.VERIFYING, lastSeenEpochMs = now()) }
+        sendProof(endpointId, member)
+        if (memberId in proofAccepted) promote(memberId)
+    }
+
+    /**
+     * A connection that never came up: the other side declined, or the radio gave up.
+     * Distinct from [onDisconnected], which is a link that was up and dropped.
+     */
+    fun onConnectionFailed(endpointId: String, reason: String) {
+        val member = _state.value.memberByEndpoint(endpointId) ?: return
+        if (member.state.isLive) return
+        attemptStartedAt.remove(member.memberId)
+        approvalStartedAt.remove(member.memberId)
+        linkUp.remove(member.memberId)
+        proofAccepted.remove(member.memberId)
+        if (member.onRoster) {
+            // Known member: the retry schedule will try again.
+            retryNotBefore[member.memberId] = now() + RETRY_BACKOFF_MS
+            updateMember(member.memberId) { it?.copy(state = MemberState.RECONNECTING) }
+        } else {
+            updateMember(member.memberId) {
+                it?.copy(state = MemberState.FAILED, failureReason = reason, humanVerified = false)
+            }
         }
     }
 
     suspend fun onDisconnected(endpointId: String) {
         val member = _state.value.memberByEndpoint(endpointId) ?: return
-        attemptStartedAt.remove(member.memberId)
+        val memberId = member.memberId
+        attemptStartedAt.remove(memberId)
+        approvalStartedAt.remove(memberId)
+        linkUp.remove(memberId)
+        proofAccepted.remove(memberId)
 
         if (member.state == MemberState.LEFT) {
-            removeMember(member.memberId)
+            removeMember(memberId)
+            return
+        }
+        if (!member.onRoster) {
+            // Never admitted: nothing to reconnect to.
+            removeMember(memberId)
+            refreshNeighbors()
             return
         }
         // Still on the roster, so treat it as a blip and retry rather than forgetting them.
-        retryNotBefore[member.memberId] = now() + RETRY_BACKOFF_MS
-        updateMember(member.memberId) {
-            it?.copy(state = MemberState.RECONNECTING, lastSeenEpochMs = now())
+        retryNotBefore[memberId] = now() + RETRY_BACKOFF_MS
+        updateMember(memberId) {
+            it?.copy(state = MemberState.RECONNECTING, humanVerified = false, lastSeenEpochMs = now())
         }
+        refreshNeighbors()
     }
 
     // --------------------------------------------------------------- control messages
 
     suspend fun onControlMessage(endpointId: String, message: GroupMessage) {
+        val sender = _state.value.memberByEndpoint(endpointId)
+
+        if (message is GroupMessage.MembershipProof) {
+            applyProof(endpointId, message)
+            return
+        }
+        // Everything else changes group state, so it must come from a verified link.
+        val trusted = sender != null &&
+            (sender.state == MemberState.CONNECTED || sender.humanVerified)
+        if (!trusted) return
+
         when (message) {
-            is GroupMessage.Welcome -> applyWelcome(message)
+            is GroupMessage.Welcome -> applyWelcome(sender!!, message)
             is GroupMessage.JoinRequest -> applyJoinRequest(endpointId, message)
-            is GroupMessage.Roster -> applyRoster(message)
+            is GroupMessage.Roster -> applyRoster(sender!!, message)
             is GroupMessage.Heartbeat -> applyHeartbeat(message)
             is GroupMessage.CoordinatorClaim -> applyCoordinatorClaim(message)
             is GroupMessage.Leave -> applyLeave(message)
+            is GroupMessage.MembershipProof -> Unit
         }
     }
 
-    private suspend fun applyWelcome(message: GroupMessage.Welcome) {
+    private suspend fun applyProof(endpointId: String, message: GroupMessage.MembershipProof) {
+        val member = _state.value.memberByEndpoint(endpointId) ?: return
+        val secret = groupSecret ?: return
+        val code = member.authCode ?: return
+        if (member.humanVerified) return
+        if (message.memberId != member.memberId) {
+            failVerification(member, "Identity mismatch on link")
+            return
+        }
+        val ok = GroupProof.verify(secret, member.memberId, localMemberId, code, message.proofHex)
+        if (!ok) {
+            failVerification(member, "Could not prove group membership")
+            return
+        }
+        proofAccepted.add(member.memberId)
+        if (member.memberId in linkUp) promote(member.memberId)
+    }
+
+    private suspend fun failVerification(member: GroupMember, reason: String) {
+        attemptStartedAt.remove(member.memberId)
+        linkUp.remove(member.memberId)
+        proofAccepted.remove(member.memberId)
+        updateMember(member.memberId) {
+            it?.copy(state = MemberState.FAILED, failureReason = reason, humanVerified = false)
+        }
+        member.endpointId?.let { transport.disconnect(it) }
+    }
+
+    private suspend fun applyWelcome(sender: GroupMember, message: GroupMessage.Welcome) {
         val group = _state.value.group ?: return
         if (message.groupId != group.groupId) return
         if (message.epoch < group.epoch) return
+        // The secret only counts when it arrives on the code-checked link to the coordinator.
+        if (!sender.humanVerified || sender.memberId != message.coordinatorId) return
+        val secret = GroupProof.fromHex(message.secretHex) ?: return
+
+        groupSecret = secret
         _state.value = _state.value.copy(
             group = group.copy(
                 name = message.groupName,
@@ -316,6 +463,7 @@ class GroupSessionManager(
             ),
             isForming = false
         )
+        updateMember(sender.memberId) { it?.copy(onRoster = true, role = GroupRole.COORDINATOR) }
         lastCoordinatorBeatAt = now()
         hasSyncedWithCoordinator = true
         publishAdvert()
@@ -323,10 +471,13 @@ class GroupSessionManager(
 
     private suspend fun applyJoinRequest(endpointId: String, message: GroupMessage.JoinRequest) {
         if (!_state.value.isCoordinator) return
-        updateMember(message.memberId) { current ->
-            (current ?: GroupMember(message.memberId, message.displayName)).copy(
+        val member = _state.value.memberByEndpoint(endpointId) ?: return
+        // Only a link a person confirmed may add someone to the roster.
+        if (!member.humanVerified || member.memberId != message.memberId) return
+        updateMember(message.memberId) {
+            it?.copy(
                 displayName = message.displayName,
-                endpointId = endpointId,
+                onRoster = true,
                 state = MemberState.CONNECTED,
                 lastSeenEpochMs = now()
             )
@@ -338,10 +489,11 @@ class GroupSessionManager(
      * The coordinator's list is authoritative. Applying it wholesale is what lets a late
      * joiner learn about members it never saw in discovery, then dial them directly.
      */
-    private suspend fun applyRoster(message: GroupMessage.Roster) {
+    private suspend fun applyRoster(sender: GroupMember, message: GroupMessage.Roster) {
         val group = _state.value.group ?: return
         if (message.groupId != group.groupId) return
         if (message.epoch < group.epoch) return
+        if (sender.memberId != group.coordinatorId) return
         if (_state.value.isCoordinator && message.epoch <= group.epoch) return
 
         message.entries.forEach { entry ->
@@ -350,20 +502,22 @@ class GroupSessionManager(
                 (current ?: GroupMember(entry.memberId, entry.displayName)).copy(
                     displayName = entry.displayName,
                     role = entry.role,
+                    onRoster = true,
                     // A roster listing is not a link; only mark live if we already had one.
                     state = current?.state ?: MemberState.DISCOVERED,
-                    isDirect = current?.endpointId != null
+                    isDirect = current?.state?.isLive == true
                 )
             }
         }
         // Anyone the coordinator dropped is no longer in the group.
         val rostered = message.entries.map { it.memberId }.toSet() + localMemberId
         _state.value.others
-            .filter { it.memberId !in rostered }
+            .filter { it.memberId !in rostered && it.state != MemberState.PENDING_APPROVAL }
             .forEach { removeMember(it.memberId) }
 
         lastCoordinatorBeatAt = now()
         hasSyncedWithCoordinator = true
+        refreshNeighbors()
         connectToMissingMembers()
     }
 
@@ -374,6 +528,9 @@ class GroupSessionManager(
             hasSyncedWithCoordinator = true
         }
         updateMember(message.memberId) { it?.copy(lastSeenEpochMs = now()) }
+        val neighbors = _state.value.neighbors + (message.memberId to message.neighbors.toSet())
+        _state.value = _state.value.copy(neighbors = neighbors)
+        refreshNeighbors()
     }
 
     /**
@@ -383,6 +540,9 @@ class GroupSessionManager(
     private suspend fun applyCoordinatorClaim(message: GroupMessage.CoordinatorClaim) {
         val group = _state.value.group ?: return
         if (message.groupId != group.groupId) return
+        if (_state.value.member(message.memberId)?.onRoster != true &&
+            message.memberId != localMemberId
+        ) return
 
         val accept = message.epoch > group.epoch ||
             (message.epoch == group.epoch && message.memberId < group.coordinatorId)
@@ -404,6 +564,7 @@ class GroupSessionManager(
         val member = _state.value.member(message.memberId) ?: return
         member.endpointId?.let { transport.disconnect(it) }
         removeMember(message.memberId)
+        refreshNeighbors()
         if (_state.value.isCoordinator) broadcastRoster()
     }
 
@@ -417,10 +578,25 @@ class GroupSessionManager(
         val current = now()
         if (_state.value.group == null) return
 
+        expireUnansweredApprovals(current)
         expireStalledAttempts(current)
         runScheduledRetries(current)
         sendHeartbeatIfDue(current)
         checkCoordinatorLiveness(current)
+    }
+
+    private suspend fun expireUnansweredApprovals(current: Long) {
+        val expired = approvalStartedAt.filter { (_, started) ->
+            current - started > APPROVAL_TIMEOUT_MS
+        }.keys.toList()
+        expired.forEach { memberId ->
+            approvalStartedAt.remove(memberId)
+            val member = _state.value.member(memberId) ?: return@forEach
+            member.endpointId?.let { transport.rejectConnection(it) }
+            updateMember(memberId) {
+                it?.copy(state = MemberState.FAILED, failureReason = "Code was not confirmed in time")
+            }
+        }
     }
 
     private suspend fun expireStalledAttempts(current: Long) {
@@ -431,6 +607,11 @@ class GroupSessionManager(
         stalled.forEach { memberId ->
             attemptStartedAt.remove(memberId)
             val member = _state.value.member(memberId) ?: return@forEach
+            if (member.state.isLive) return@forEach
+            if (member.state == MemberState.VERIFYING) {
+                failVerification(member, "Did not prove group membership")
+                return@forEach
+            }
             val attempts = member.attempts + 1
             if (attempts >= MAX_ATTEMPTS) {
                 updateMember(memberId) {
@@ -473,7 +654,11 @@ class GroupSessionManager(
         if (current - lastHeartbeatSentAt < HEARTBEAT_INTERVAL_MS) return
         lastHeartbeatSentAt = current
         val group = _state.value.group ?: return
-        val beat = GroupMessage.Heartbeat(localMemberId, group.epoch)
+        val beat = GroupMessage.Heartbeat(
+            memberId = localMemberId,
+            epoch = group.epoch,
+            neighbors = _state.value.connected.map { it.memberId }
+        )
         _state.value.connected.forEach { member ->
             member.endpointId?.let { sendControl(it, beat) }
         }
@@ -486,6 +671,7 @@ class GroupSessionManager(
         // Never reached them at all: this is a join that is still failing, not a
         // coordinator that died. Retry logic owns this case.
         if (!hasSyncedWithCoordinator) return
+        if (groupSecret == null) return
         if (current - lastCoordinatorBeatAt <= COORDINATOR_TIMEOUT_MS) return
 
         // Only the lowest surviving id claims, so the group does not fragment.
@@ -505,6 +691,7 @@ class GroupSessionManager(
         _state.value.connected.forEach { member ->
             member.endpointId?.let { sendControl(it, claim) }
         }
+        refreshNeighbors()
         publishAdvert()
         broadcastRoster()
     }
@@ -513,14 +700,21 @@ class GroupSessionManager(
 
     /**
      * Both devices see each other at once, so without a rule both would dial and collide.
-     * The lower member id initiates; the higher waits for the incoming request.
+     * The lower member id initiates; the higher waits for the incoming request. Until we
+     * are admitted, though, we are the only one who can dial — the coordinator does not
+     * know we exist yet.
      */
-    private fun shouldInitiateTo(memberId: String): Boolean = localMemberId < memberId
+    private fun shouldInitiateTo(memberId: String): Boolean {
+        val group = _state.value.group ?: return false
+        if (groupSecret == null) return memberId == group.coordinatorId
+        return localMemberId < memberId
+    }
 
     private suspend fun maybeInitiate(memberId: String) {
         val member = _state.value.member(memberId) ?: return
-        if (member.state.isLive || member.state == MemberState.CONNECTING) return
+        if (member.state.isLive || member.state.isTransitional) return
         if (member.state == MemberState.FAILED) return
+        if (!member.onRoster) return
         if (attemptStartedAt.containsKey(memberId)) return
         if (!shouldInitiateTo(memberId)) return
         val endpointId = member.endpointId ?: return
@@ -532,8 +726,58 @@ class GroupSessionManager(
 
     private suspend fun connectToMissingMembers() {
         _state.value.others
-            .filter { !it.state.isLive && it.state != MemberState.CONNECTING && it.endpointId != null }
+            .filter { !it.state.isLive && !it.state.isTransitional && it.endpointId != null }
             .forEach { maybeInitiate(it.memberId) }
+    }
+
+    private suspend fun promote(memberId: String) {
+        attemptStartedAt.remove(memberId)
+        updateMember(memberId) {
+            it?.copy(
+                state = MemberState.CONNECTED,
+                attempts = 0,
+                failureReason = null,
+                isDirect = true,
+                reachableViaRelay = false,
+                lastSeenEpochMs = now()
+            )
+        }
+        _state.value = _state.value.copy(isForming = false, lastError = null)
+        refreshNeighbors()
+        if (_state.value.isCoordinator && _state.value.member(memberId)?.onRoster == true) {
+            broadcastRoster()
+        }
+    }
+
+    private suspend fun sendProof(endpointId: String, member: GroupMember) {
+        val secret = groupSecret ?: return
+        val code = member.authCode ?: return
+        val proof = GroupProof.compute(secret, localMemberId, member.memberId, code)
+        sendControl(endpointId, GroupMessage.MembershipProof(localMemberId, proof))
+    }
+
+    /**
+     * Keeps our own neighbour entry current and marks roster members that we cannot reach
+     * directly but a neighbour of ours can, so the UI and voice relay agree.
+     */
+    private fun refreshNeighbors() {
+        val snapshot = _state.value
+        val mine = snapshot.connected.map { it.memberId }.toSet()
+        val neighbors = snapshot.neighbors
+            .filterKeys { it == localMemberId || it in mine }
+            .plus(localMemberId to mine)
+
+        val members = snapshot.members.map { member ->
+            if (member.memberId == localMemberId || member.state.isLive) {
+                member.copy(reachableViaRelay = false, isDirect = member.state.isLive || member.isDirect)
+            } else {
+                val viaRelay = member.onRoster && mine.any { n ->
+                    neighbors[n]?.contains(member.memberId) == true
+                }
+                member.copy(reachableViaRelay = viaRelay, isDirect = false)
+            }
+        }
+        _state.value = snapshot.copy(members = members, neighbors = neighbors)
     }
 
     private suspend fun broadcastRoster() {
@@ -542,7 +786,7 @@ class GroupSessionManager(
         if (!snapshot.isCoordinator) return
 
         val entries = snapshot.members
-            .filter { it.state.isLive || it.memberId == localMemberId }
+            .filter { it.memberId == localMemberId || (it.onRoster && it.state.isLive) }
             .map { RosterEntry(it.memberId, it.displayName, it.role) }
         val roster = GroupMessage.Roster(group.groupId, group.epoch, entries)
         snapshot.connected.forEach { member ->
@@ -576,6 +820,14 @@ class GroupSessionManager(
         }
     }
 
+    private fun resetLinkTracking() {
+        attemptStartedAt.clear()
+        approvalStartedAt.clear()
+        retryNotBefore.clear()
+        linkUp.clear()
+        proofAccepted.clear()
+    }
+
     private fun updateMember(memberId: String, transform: (GroupMember?) -> GroupMember?) {
         val snapshot = _state.value
         val existing = snapshot.member(memberId)
@@ -591,9 +843,13 @@ class GroupSessionManager(
     private fun removeMember(memberId: String) {
         if (memberId == localMemberId) return
         attemptStartedAt.remove(memberId)
+        approvalStartedAt.remove(memberId)
         retryNotBefore.remove(memberId)
+        linkUp.remove(memberId)
+        proofAccepted.remove(memberId)
         _state.value = _state.value.copy(
-            members = _state.value.members.filter { it.memberId != memberId }
+            members = _state.value.members.filter { it.memberId != memberId },
+            neighbors = _state.value.neighbors - memberId
         )
     }
 }
