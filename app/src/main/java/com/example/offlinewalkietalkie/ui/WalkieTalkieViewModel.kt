@@ -25,6 +25,7 @@ import com.example.offlinewalkietalkie.group.GroupNearbyPort
 import com.example.offlinewalkietalkie.group.GroupRole
 import com.example.offlinewalkietalkie.group.GroupSessionManager
 import com.example.offlinewalkietalkie.group.GroupState
+import com.example.offlinewalkietalkie.group.isTransitional
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.*
@@ -278,7 +279,9 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                             nonce,
                             headerAad
                         )
-                        if (plaintext != null) {
+                        if (plaintext != null && !isVoiceTrusted(peerId)) {
+                            Log.w(TAG, "VOICE dropped from $peerId: decrypted but not group-verified")
+                        } else if (plaintext != null) {
                             Log.d(TAG, "VOICE decrypt OK seq=${decodedFrame.sequence} plaintext=${plaintext.size}B")
                             voiceEngine.handleIncomingFrame(
                                 peerId = peerId,
@@ -360,13 +363,29 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         }.launchIn(viewModelScope)
     }
 
+    /**
+     * Gates voice on group verification, not raw transport connectivity. A link the
+     * group manager has accepted but not yet HMAC-verified reports isConnected=true at
+     * the transport layer well before it is trustworthy — without this check that window
+     * would carry live audio to (or from) a peer that turns out to be an impostor.
+     */
+    private fun isVoiceTrusted(peerId: String): Boolean {
+        val group = groupState.value
+        if (group.isInGroup) return group.isTrustedEndpoint(peerId)
+        // No group formed: this is the legacy direct-pairing flow, gated by its own
+        // SAS-confirmed session key.
+        return cryptoManager.hasSessionKey(peerId)
+    }
+
     private suspend fun relayVoiceFrame(
         decodedFrame: Frame,
         plaintext: ByteArray,
         ingressPeerId: String
     ) {
         val nextHopLimit = (decodedFrame.hopLimit - 1).toByte()
-        val activePeers = _peers.value.filter { it.isConnected && it.id != ingressPeerId }
+        val activePeers = _peers.value.filter {
+            it.isConnected && it.id != ingressPeerId && isVoiceTrusted(it.id)
+        }
         activePeers.forEach { targetPeer ->
             if (!cryptoManager.hasSessionKey(targetPeer.id)) return@forEach
             val dummyFwd = Frame(
@@ -426,7 +445,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     private fun broadcastVoiceFrame(sequence: Int, encodedFrame: ByteArray) {
         viewModelScope.launch {
-            val activePeers = _peers.value.filter { it.isConnected }
+            val activePeers = _peers.value.filter { it.isConnected && isVoiceTrusted(it.id) }
             if (activePeers.isNotEmpty() && (sequence == 1 || sequence % 50 == 0)) {
                 Log.i(TAG, "Sending VOICE frame $sequence to ${activePeers.size} peer(s), payload=${encodedFrame.size}B")
             }
@@ -537,10 +556,24 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         peerList: List<Peer>,
         previouslyConnectedIds: Set<String>
     ) {
+        val nowIds = peerList.map { it.id }.toSet()
         val nowConnectedIds = peerList.filter { it.isConnected }.map { it.id }.toSet()
 
         (nowConnectedIds - previouslyConnectedIds).forEach { groupManager.onConnected(it) }
         (previouslyConnectedIds - nowConnectedIds).forEach { groupManager.onDisconnected(it) }
+
+        // A connection that disappears from the transport's peer list without ever
+        // reaching isConnected=true was declined, timed out, or the radio dropped it
+        // mid-handshake. Without this the group manager's CONNECTING/VERIFYING entry
+        // would sit stuck forever instead of retrying or surfacing the failure.
+        val everKnown = groupState.value.others
+            .filter { it.endpointId != null && it.state.isTransitional }
+            .map { it.memberId to it.endpointId!! }
+        everKnown.forEach { (_, endpointId) ->
+            if (endpointId !in nowIds && endpointId !in nowConnectedIds) {
+                groupManager.onConnectionFailed(endpointId, "Connection was lost")
+            }
+        }
     }
 
     private suspend fun handleGroupControl(peerId: String, payload: ByteArray) {

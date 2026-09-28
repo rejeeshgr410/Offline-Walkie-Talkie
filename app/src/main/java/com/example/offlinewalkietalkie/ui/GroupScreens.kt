@@ -400,6 +400,17 @@ private fun MemberRow(
                     color = statusColor(member, isLocal),
                     fontSize = 12.sp
                 )
+                // The whole point of asking a person to accept: they must see the same
+                // code shown on the other phone before tapping it, or this is worthless.
+                if (member.state == MemberState.PENDING_APPROVAL && member.authCode != null) {
+                    Text(
+                        text = "Code: ${member.authCode}",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        letterSpacing = 1.sp
+                    )
+                }
             }
 
             when {
