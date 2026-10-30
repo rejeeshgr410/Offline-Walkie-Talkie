@@ -44,6 +44,8 @@ fun PttOrb(
     // pointerInput(Unit) builds its gesture block once, so reading isHeldByOther directly
     // inside it would pin the value from first composition.
     val heldByOther by rememberUpdatedState(isHeldByOther)
+    val pressStart by rememberUpdatedState(onPressStart)
+    val pressEnd by rememberUpdatedState(onPressEnd)
 
     val infiniteTransition = rememberInfiniteTransition(label = "ptt_pulse")
     val pulseScale by infiniteTransition.animateFloat(
@@ -115,10 +117,13 @@ fun PttOrb(
                         onPress = {
                             if (!heldByOther) {
                                 isPressed = true
-                                onPressStart()
-                                tryAwaitRelease()
-                                isPressed = false
-                                onPressEnd()
+                                try {
+                                    pressStart()
+                                    tryAwaitRelease()
+                                } finally {
+                                    isPressed = false
+                                    pressEnd()
+                                }
                             }
                         }
                     )
