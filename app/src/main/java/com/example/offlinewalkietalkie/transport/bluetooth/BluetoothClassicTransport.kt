@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import com.example.offlinewalkietalkie.transport.*
+import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
@@ -51,6 +52,7 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
 
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
+    private var receiverRegistered = false
     private var serverSocket: BluetoothServerSocket? = null
     private var activeConnections = mutableMapOf<String, ConnectedThread>()
 
@@ -86,8 +88,11 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
         
         _state.value = TransportState.ACTIVE
         val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
-        context.registerReceiver(discoveryReceiver, filter)
-        bluetoothAdapter.startDiscovery()
+        if (!receiverRegistered) {
+            context.registerReceiver(discoveryReceiver, filter)
+            receiverRegistered = true
+        }
+        if (!bluetoothAdapter.isDiscovering) bluetoothAdapter.startDiscovery()
     }
 
     override suspend fun connect(peerId: String) {
@@ -128,7 +133,8 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
     override suspend fun stop() {
         bluetoothAdapter?.cancelDiscovery()
         try {
-            context.unregisterReceiver(discoveryReceiver)
+            if (receiverRegistered) context.unregisterReceiver(discoveryReceiver)
+            receiverRegistered = false
         } catch (e: IllegalArgumentException) {
             // Not registered
         }
@@ -179,23 +185,8 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
         override fun run() {
             while (true) {
                 try {
-                    val lengthBytes = ByteArray(4)
-                    var readLength = inStream.read(lengthBytes)
-                    if (readLength == -1) break
-                    
-                    val length = ByteBuffer.wrap(lengthBytes).int
-                    if (length > 0) {
-                        val payload = ByteArray(length)
-                        var totalRead = 0
-                        while (totalRead < length) {
-                            val r = inStream.read(payload, totalRead, length - totalRead)
-                            if (r == -1) break
-                            totalRead += r
-                        }
-                        if (totalRead == length) {
-                            _incomingFrames.tryEmit(IncomingFrame(peerId, payload))
-                        }
-                    }
+                    val payload = LengthPrefixedFrameIO.read(inStream) ?: break
+                    _incomingFrames.tryEmit(IncomingFrame(peerId, payload))
                 } catch (e: IOException) {
                     break
                 }
@@ -205,14 +196,13 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
             removePeer(peerId)
         }
 
+        @Synchronized
         fun write(bytes: ByteArray) {
             try {
-                val lengthBytes = ByteBuffer.allocate(4).putInt(bytes.size).array()
-                outStream.write(lengthBytes)
-                outStream.write(bytes)
-                outStream.flush()
+                LengthPrefixedFrameIO.write(outStream, bytes)
             } catch (e: IOException) {
-                // Send failed
+                Log.w("TL/BTClassic", "Bluetooth write failed", e)
+                cancel()
             }
         }
 
