@@ -82,6 +82,10 @@ class VoiceEngine(
 
     var speakerphoneEnabled: Boolean = true
 
+    /** Mutes live received playback while keeping decoded frames available for history. */
+    @Volatile
+    var isRealtimeMuted: Boolean = false
+
     fun startPlayback() {
         if (playbackJob?.isActive == true) return
         routeManager?.requestAudioFocus()
@@ -106,7 +110,7 @@ class VoiceEngine(
                 // back would play them sequentially and drain the track at N times real time.
                 if (due.isNotEmpty()) {
                     val mixedBytes = shortsToBytes(mixFrames(due))
-                    playback.playFrame(mixedBytes)
+                    if (!isRealtimeMuted) playback.playFrame(mixedBytes)
                     onRawPcmPlayed?.invoke(mixedBytes)
                 }
 

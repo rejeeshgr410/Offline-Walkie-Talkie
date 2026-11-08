@@ -6,6 +6,8 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -260,7 +262,8 @@ fun HomeScreen(
     onNavigateToCreateChannel: () -> Unit,
     onNavigateToJoinChannel: () -> Unit,
     onNavigateToRadar: () -> Unit = {},
-    onNavigateToHistory: () -> Unit = {}
+    onNavigateToHistory: () -> Unit = {},
+    onNavigateToDiscoverMap: () -> Unit = {}
 ) {
     val peers by viewModel.peers.collectAsState()
     val floorState by viewModel.floorState.collectAsState()
@@ -268,6 +271,7 @@ fun HomeScreen(
     val isRelayModeActive by viewModel.isRelayModeActive.collectAsState()
     val currentChannelName by viewModel.currentChannelName.collectAsState()
     val speakerphoneEnabled by viewModel.speakerphoneEnabled.collectAsState()
+    val isMuted by viewModel.isMuted.collectAsState()
     val isInSession by viewModel.isInSession.collectAsState()
 
     val securedPeerCount by viewModel.securedPeerCount.collectAsState()
@@ -345,17 +349,20 @@ fun HomeScreen(
                     floorState = floorState,
                     isOutdoorMode = isOutdoorMode,
                     speakerphoneEnabled = speakerphoneEnabled,
+                    isMuted = isMuted,
                     isRelayModeActive = isRelayModeActive,
                     securedPeerCount = securedPeerCount,
                     transportTypeName = transportTypeName,
                     peerTelemetry = peerTelemetry,
                     localBatteryPercent = localBatteryPercent,
                     onToggleSpeaker = { viewModel.toggleAudioRoute() },
+                    onToggleMute = { viewModel.toggleMute() },
                     onToggleRelay = { viewModel.toggleRelayMode() },
                     onPttStart = { viewModel.requestPtt() },
                     onPttEnd = { viewModel.releasePtt() },
                     onReplayLast = { viewModel.replayLastMessage() },
                     onNavigateToRadar = onNavigateToRadar,
+                    onNavigateToDiscoverMap = onNavigateToDiscoverMap,
                     onNavigateToNearby = onNavigateToNearby,
                     onNavigateToPairing = onNavigateToPairing,
                     onNavigateToSettings = onNavigateToSettings,
@@ -367,6 +374,7 @@ fun HomeScreen(
                     isOutdoorMode = isOutdoorMode,
                     onCreateChannel = { onNavigateToCreateChannel() },
                     onJoinChannel = { onNavigateToJoinChannel() },
+                    onOpenMap = onNavigateToDiscoverMap,
                     onScanNearby = {
                         viewModel.startNearby()
                         onNavigateToNearby()
@@ -501,29 +509,51 @@ private fun ActiveSessionContent(
     floorState: FloorState,
     isOutdoorMode: Boolean,
     speakerphoneEnabled: Boolean,
+    isMuted: Boolean,
     isRelayModeActive: Boolean,
     securedPeerCount: Int,
     transportTypeName: String,
     peerTelemetry: Map<String, com.example.offlinewalkietalkie.protocol.PeerTelemetry> = emptyMap(),
     localBatteryPercent: Int = 100,
     onToggleSpeaker: () -> Unit,
+    onToggleMute: () -> Unit,
     onToggleRelay: () -> Unit,
     onPttStart: () -> Unit,
     onPttEnd: () -> Unit,
     onReplayLast: () -> Unit = {},
     onNavigateToRadar: () -> Unit = {},
+    onNavigateToDiscoverMap: () -> Unit = {},
     onNavigateToNearby: () -> Unit,
     onNavigateToPairing: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToContacts: () -> Unit,
     onLeaveSession: () -> Unit
 ) {
+    var showMuteConfirmation by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (showMuteConfirmation) {
+            AlertDialog(
+                onDismissRequest = { showMuteConfirmation = false },
+                title = { Text("Mute live audio?") },
+                text = {
+                    Text("You won't hear peers in real time while muted. Incoming transmissions will remain available in voice history for playback.")
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showMuteConfirmation = false
+                        onToggleMute()
+                    }) { Text("Mute") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showMuteConfirmation = false }) { Text("Cancel") }
+                }
+            )
+        }
         // Current Channel Glass Card
         GlassSurface(
             cornerRadius = 26.dp,
@@ -629,6 +659,24 @@ private fun ActiveSessionContent(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Match the dedicated receive mute control exposed by the reference intercom.
+            Button(
+                onClick = {
+                    if (isMuted) onToggleMute() else showMuteConfirmation = true
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isMuted) Color(0xFFFFB74D) else Color(0xFF1E293B),
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.size(width = 58.dp, height = 42.dp)
+            ) {
+                Icon(
+                    imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                    contentDescription = if (isMuted) "Unmute live audio" else "Mute live audio",
+                    modifier = Modifier.size(21.dp)
+                )
+            }
             // Speaker Route Shortcut
             GlassSurface(
                 cornerRadius = 16.dp,
@@ -803,6 +851,12 @@ private fun ActiveSessionContent(
             }
         }
 
+        OutlinedButton(onClick = onNavigateToDiscoverMap, modifier = Modifier.fillMaxWidth().height(40.dp)) {
+            Icon(Icons.Default.Map, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Discover map")
+        }
+
         // Leave Session button
         OutlinedButton(
             onClick = onLeaveSession,
@@ -828,6 +882,7 @@ private fun IdleDashboardContent(
     isOutdoorMode: Boolean,
     onCreateChannel: () -> Unit,
     onJoinChannel: () -> Unit,
+    onOpenMap: () -> Unit,
     onScanNearby: () -> Unit
 ) {
     GlassSurface(
@@ -900,6 +955,12 @@ private fun IdleDashboardContent(
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = BrightCyan)
             ) {
                 Text(text = stringResource(R.string.scan_nearby))
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(onClick = onOpenMap, modifier = Modifier.fillMaxWidth().height(44.dp)) {
+                Icon(Icons.Default.Map, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Discover map")
             }
         }
     }
@@ -1572,10 +1633,13 @@ fun PairingScreen(
 @Composable
 fun SettingsScreen(
     viewModel: WalkieTalkieViewModel,
+    onOpenOfflineMaps: () -> Unit,
     onBack: () -> Unit
 ) {
     val isOutdoorMode by viewModel.isOutdoorMode.collectAsState()
     val speakerphoneEnabled by viewModel.speakerphoneEnabled.collectAsState()
+    val disturbanceMode by viewModel.disturbanceMode.collectAsState()
+    val allowIncomingRequests by viewModel.allowIncomingRequests.collectAsState()
     var loopbackEnabled by remember { mutableStateOf(false) }
 
     Box(
@@ -1585,7 +1649,7 @@ fun SettingsScreen(
             .safeDrawingPadding()
             .padding(16.dp)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -1603,6 +1667,36 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Intercom controls", color = Color.White, fontWeight = FontWeight.Bold)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Allow incoming requests", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text(if (allowIncomingRequests) "New devices wait for your approval" else "Incoming requests are rejected", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                        }
+                        Switch(checked = allowIncomingRequests, onCheckedChange = viewModel::setAllowIncomingRequests)
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Disturbance mode", color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Keep SOS alerts visible but silence their alarm", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                        }
+                        Switch(checked = disturbanceMode, onCheckedChange = viewModel::setDisturbanceMode)
+                    }
+                    OutlinedButton(onClick = { viewModel.markTextMessagesRead() }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Mark received messages read")
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(onClick = { onOpenOfflineMaps() }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Map, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Offline maps")
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
             GlassSurface(
                 cornerRadius = 20.dp,
                 isOutdoorMode = isOutdoorMode,
@@ -1615,7 +1709,7 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = stringResource(R.string.outdoor_mode),
                                 fontWeight = FontWeight.Bold,
@@ -1641,7 +1735,7 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = stringResource(R.string.test_audio_loopback),
                                 fontWeight = FontWeight.Bold,
@@ -1670,7 +1764,7 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "Audio Routing",
                                 fontWeight = FontWeight.Bold,
@@ -1745,7 +1839,7 @@ fun SettingsScreen(
                                 color = Color.White
                             )
                             Text(
-                                text = "Hold Volume Down to talk when screen is locked",
+                                text = "Hold Volume Down while TalkLoop is on screen",
                                 color = Color(0xFFCBD5E1),
                                 fontSize = 11.sp
                             )
@@ -1987,6 +2081,7 @@ fun MessagesScreen(
                     ) {
                         items(messages, key = { it.messageId }) { msg ->
                             val isMine = msg.senderMemberId == viewModel.sessionIdForMessages
+                            var actionsExpanded by remember(msg.messageId) { mutableStateOf(false) }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start
@@ -2015,11 +2110,28 @@ fun MessagesScreen(
                                                 TextDeliveryStatus.SENDING -> "Sending…"
                                                 TextDeliveryStatus.DELIVERED -> "Delivered"
                                                 TextDeliveryStatus.FAILED -> "Failed"
-                                            },
+                                            } + if (!isMine && !msg.isRead) " · Unread" else "",
                                             color = if (msg.status == TextDeliveryStatus.FAILED)
                                                 RoseActive else Color(0xFF94A3B8),
                                             fontSize = 10.sp
                                         )
+                                        Box(Modifier.align(Alignment.End)) {
+                                            TextButton(onClick = { actionsExpanded = true }) { Text("Actions", fontSize = 10.sp) }
+                                            DropdownMenu(expanded = actionsExpanded, onDismissRequest = { actionsExpanded = false }) {
+                                                if (!isMine && !msg.isRead) DropdownMenuItem(
+                                                    text = { Text("Mark read") },
+                                                    onClick = { actionsExpanded = false; viewModel.markTextMessageRead(msg.messageId) }
+                                                )
+                                                if (isMine && msg.status == TextDeliveryStatus.FAILED) DropdownMenuItem(
+                                                    text = { Text("Resend") },
+                                                    onClick = { actionsExpanded = false; viewModel.resendTextMessage(msg.messageId) }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Delete") },
+                                                    onClick = { actionsExpanded = false; viewModel.deleteTextMessage(msg.messageId) }
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }

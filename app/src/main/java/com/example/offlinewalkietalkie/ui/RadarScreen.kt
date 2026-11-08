@@ -1,5 +1,7 @@
 package com.example.offlinewalkietalkie.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -11,10 +13,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -34,6 +39,7 @@ fun RadarScreen(
     viewModel: WalkieTalkieViewModel,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val myLocation by viewModel.currentLocation.collectAsState()
     val heading by viewModel.deviceHeading.collectAsState()
     val peerLocations by viewModel.peerLocations.collectAsState()
@@ -76,6 +82,9 @@ fun RadarScreen(
         RadarMath.relativeBearing(heading, targetBearing)
     } else 0f
 
+    val peerLocationAgeMs = targetPeer?.let { (System.currentTimeMillis() - it.timestamp).coerceAtLeast(0L) }
+    val locationIsFresh = peerLocationAgeMs != null && peerLocationAgeMs < 120_000L
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -115,6 +124,16 @@ fun RadarScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = when {
+                            targetPeer == null -> "Waiting for a shared location"
+                            locationIsFresh -> "Location updated ${peerLocationAgeMs!! / 1000}s ago"
+                            else -> "Last shared location · ${peerLocationAgeMs!! / 60_000}m ago"
+                        },
+                        color = if (locationIsFresh) Color(0xFF81C784) else Color(0xFFFFCC80),
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -133,6 +152,21 @@ fun RadarScreen(
                             )
                         }
                     }
+                }
+            }
+
+            if (targetPeer != null && targetPeer.latitude != 0.0 && targetPeer.longitude != 0.0) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        val uri = Uri.parse("google.navigation:q=${targetPeer.latitude},${targetPeer.longitude}")
+                        val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        runCatching { context.startActivity(intent) }
+                    }
+                ) {
+                    Icon(Icons.Default.Navigation, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Navigate to ${targetPeer.peerName}")
                 }
             }
 

@@ -42,7 +42,7 @@ class ReliableMessageManagerTest {
         assertFalse(delivered)
 
         // Peer sends ACK for seq 1
-        manager.onAckReceived(100L, 1)
+        manager.onAckReceived(100L, 1, "ep1")
 
         assertTrue("Should be marked delivered upon receiving ACK", delivered)
         assertFalse(failed)

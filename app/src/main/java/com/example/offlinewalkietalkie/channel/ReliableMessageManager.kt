@@ -32,7 +32,7 @@ class ReliableMessageManager(
         val onFailed: (reason: String) -> Unit
     )
 
-    // Key: "memberId:sequence" -> PendingDelivery
+    // Key includes the endpoint because one text message can be sent to several peers.
     private val pendingAcks = ConcurrentHashMap<String, PendingDelivery>()
 
     // Key: "memberId:sequence" -> Timestamp of receipt
@@ -49,7 +49,7 @@ class ReliableMessageManager(
         onDelivered: () -> Unit = {},
         onFailed: (reason: String) -> Unit = {}
     ) {
-        val key = "$memberId:$sequence"
+        val key = "$memberId:$sequence:$endpointId"
         val pending = PendingDelivery(
             memberId = memberId,
             sequence = sequence,
@@ -89,8 +89,8 @@ class ReliableMessageManager(
     /**
      * Called when an incoming ACK frame is received.
      */
-    fun onAckReceived(memberId: Long, sequence: Int) {
-        val key = "$memberId:$sequence"
+    fun onAckReceived(memberId: Long, sequence: Int, endpointId: String) {
+        val key = "$memberId:$sequence:$endpointId"
         val pending = pendingAcks.remove(key)
         if (pending != null) {
             pending.retryJob?.cancel()

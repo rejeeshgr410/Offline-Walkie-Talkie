@@ -63,7 +63,8 @@ fun MainNavigation(viewModel: WalkieTalkieViewModel = viewModel()) {
                         onNavigateToCreateChannel = { backStack.add(GroupLobby) },
                         onNavigateToJoinChannel = { backStack.add(GroupLobby) },
                         onNavigateToRadar = { backStack.add(RadarCompass) },
-                        onNavigateToHistory = { backStack.add(VoiceHistory) }
+                        onNavigateToHistory = { backStack.add(VoiceHistory) },
+                        onNavigateToDiscoverMap = { backStack.add(DiscoverMap) }
                     )
                 }
                 entry<NearbyDevices> {
@@ -88,6 +89,7 @@ fun MainNavigation(viewModel: WalkieTalkieViewModel = viewModel()) {
                 entry<Settings> {
                     SettingsScreen(
                         viewModel = viewModel,
+                        onOpenOfflineMaps = { backStack.add(OfflineMaps) },
                         onBack = { backStack.removeLastOrNull() }
                     )
                 }
@@ -153,6 +155,12 @@ fun MainNavigation(viewModel: WalkieTalkieViewModel = viewModel()) {
                         viewModel = viewModel,
                         onBack = { backStack.removeLastOrNull() }
                     )
+                }
+                entry<DiscoverMap> {
+                    DiscoverMapScreen(viewModel = viewModel, onBack = { backStack.removeLastOrNull() })
+                }
+                entry<OfflineMaps> {
+                    OfflineMapsScreen(viewModel = viewModel, onBack = { backStack.removeLastOrNull() })
                 }
                 entry<VoiceHistory> {
                     VoiceHistoryScreen(

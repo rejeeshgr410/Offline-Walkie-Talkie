@@ -33,9 +33,14 @@
   - `NotificationController.kt`: Rich notifications with quick PTT actions.
 - **User Interface (`ui/`)**:
   - `MainScreen.kt`, `PttOrb.kt`, `GlassSurface.kt`, `WalkieTalkieViewModel.kt`: Liquid glass visual styling, 176dp illuminated PTT Orb, audio visualization waveforms, RTL support (Arabic), and contact verification views.
-  - `RadarScreen.kt`: Offline relative directional radar scope with dynamic distance range rings, cardinal north pointer, peer blips, and target tracking.
+  - `RadarScreen.kt`: Offline relative directional radar scope with dynamic distance range rings, cardinal north pointer, peer blips, target tracking, location freshness timestamps, and external navigation handoff.
+  - `MapScreens.kt`:
+    - `DiscoverMapScreen`: Schematic coordinate grid plotting real-time and historical peer locations with freshness coloring (Cyan for fresh, Amber for stale, White for local device).
+    - `OfflineMapsScreen`: User-initiated downloader for bounded OpenStreetMap Overpass road geometry extracts (0.2–2.0 km radius) with progress tracking, pause/resume, and local vector road rendering.
   - `VoiceHistoryScreen.kt`: Chronological offline voice transmission timeline with duration formatting, sender badges, and 1-tap PCM replay.
   - `SosDialog.kt`: Emergency distress broadcast modal and high-priority distress alert banner with direct SOS radar tracking.
+- **Offline Maps & Data (`data/`)**:
+  - `OfflineMapRepository.kt`: Manages download and local JSON persistence of bounded OSM road networks from Overpass API into `filesDir/offline-map-areas/`.
 - **Offline SOS Distress Subsystem (`sos/`)**:
   - `SosManager.kt`: Offline SOS beacon broadcast loop, multi-hop mesh forwarding with TTL decrement, deduplication, and siren control.
   - `EmergencyAlarmPlayer.kt`: Hardware-independent dual-frequency PCM siren generator (850 Hz / 1100 Hz alternating pattern) on `AudioTrack` max volume stream.
@@ -115,6 +120,7 @@ All commands can be run directly from the project root using the Gradle wrapper:
 
 ## 5. Key Documentation Files in Repository
 
+- [VIVO_FEATURE_COMPARISON.md](file:///c:/Reji/Android%20Apps/Offline%20Walkie%20Talkie/VIVO_FEATURE_COMPARISON.md): Comprehensive comparative feature mapping between Vivo Walkie-Talkie (`com.vivo.walkietalkie`) and TalkLoop.
 - [IMPLEMENTATION_STATUS.md](file:///c:/Reji/Android%20Apps/Offline%20Walkie%20Talkie/IMPLEMENTATION_STATUS.md): Complete progress breakdown across Stages 0 through 9.
 - [PHYSICAL_TEST_PLAN.md](file:///c:/Reji/Android%20Apps/Offline%20Walkie%20Talkie/PHYSICAL_TEST_PLAN.md): End-to-end multi-device physical testing procedures and checklist.
 - [HANDOFF_TESTING.md](file:///c:/Reji/Android%20Apps/Offline%20Walkie%20Talkie/HANDOFF_TESTING.md): Verification steps and testing guidelines.

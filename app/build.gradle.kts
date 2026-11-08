@@ -30,6 +30,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.offlinewalkietalkie"
+        if (providers.gradleProperty("qaInstall").orNull == "true") applicationIdSuffix = ".qa"
         minSdk = 29
         targetSdk = 36
         versionCode = 1

@@ -17,7 +17,7 @@ val WarmAmber = Color(0xFFFFB45C)
 val RoseActive = Color(0xFFFF5E77)
 
 // Glass Surfaces
-val GlassBackground = Color(0x14FFFFFF) // ~8% White
+val GlassBackground = Color(0xFF172438) // ~8% White
 val GlassBackgroundHover = Color(0x1FFFFFFF) // ~12% White
 val GlassBorder = Color(0x2EFFFFFF) // ~18% White
 val GlassSubtleBackground = Color(0x0DFFFFFF) // ~5% White
@@ -29,7 +29,7 @@ val OutdoorCardBorder = Color(0xFF475569)
 
 // Gradients
 val AtmosphericDarkBrush = Brush.radialGradient(
-    colors = listOf(SlateBlue, Color(0xFF1A273B), DeepInk),
+    colors = listOf(Color(0xFF18283B), Color(0xFF111C2D), DeepInk),
     radius = 1800f
 )
 

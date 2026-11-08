@@ -11,6 +11,9 @@ import androidx.lifecycle.viewModelScope
 import com.example.offlinewalkietalkie.crypto.CryptoManager
 import com.example.offlinewalkietalkie.history.VoiceHistoryManager
 import com.example.offlinewalkietalkie.history.VoiceMessage
+import com.example.offlinewalkietalkie.data.OfflineMapArea
+import com.example.offlinewalkietalkie.data.OfflineMapRepository
+import com.example.offlinewalkietalkie.data.OfflineMapPoint
 import com.example.offlinewalkietalkie.mesh.RoutingManager
 import com.example.offlinewalkietalkie.protocol.FloorState
 import com.example.offlinewalkietalkie.protocol.Frame
@@ -50,9 +53,11 @@ import com.example.offlinewalkietalkie.service.NotificationController
 import com.example.offlinewalkietalkie.service.WalkieTalkieForegroundService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -66,6 +71,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     private val transport = TransportManager(application)
     private val routingManager = RoutingManager(transport)
     private val voiceEngine = VoiceEngine(codec = AmrNbCodec(), context = application)
+    private val offlineMapRepository = OfflineMapRepository(application)
     private val cryptoManager = CryptoManager()
 
     private val sessionId: Long = System.currentTimeMillis()
@@ -138,6 +144,9 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     private val _speakerphoneEnabled = MutableStateFlow(true)
     val speakerphoneEnabled = _speakerphoneEnabled.asStateFlow()
 
+    private val _isMuted = MutableStateFlow(false)
+    val isMuted = _isMuted.asStateFlow()
+
     /** Starts idle: the dashboard must not claim an active session before one exists. */
     private val _isInSession = MutableStateFlow(false)
     val isInSession = _isInSession.asStateFlow()
@@ -156,6 +165,25 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     private val _textMessages = MutableStateFlow<List<TextMessage>>(emptyList())
     val textMessages = _textMessages.asStateFlow()
+
+    private val requestPrefs = application.getSharedPreferences("intercom_request_policy", 0)
+    private val _allowIncomingRequests = MutableStateFlow(requestPrefs.getBoolean("allow_incoming", true))
+    val allowIncomingRequests = _allowIncomingRequests.asStateFlow()
+
+    private val _disturbanceMode = MutableStateFlow(requestPrefs.getBoolean("disturbance_mode", false))
+    val disturbanceMode = _disturbanceMode.asStateFlow()
+
+    private val _offlineMapAreas = MutableStateFlow(offlineMapRepository.list())
+    val offlineMapAreas = _offlineMapAreas.asStateFlow()
+    private val _offlineMapProgressBytes = MutableStateFlow<Long?>(null)
+    val offlineMapProgressBytes = _offlineMapProgressBytes.asStateFlow()
+    private val _offlineMapError = MutableStateFlow<String?>(null)
+    val offlineMapError = _offlineMapError.asStateFlow()
+    private val _selectedOfflineMap = MutableStateFlow<OfflineMapArea?>(null)
+    val selectedOfflineMap = _selectedOfflineMap.asStateFlow()
+    private val _selectedOfflineMapRoads = MutableStateFlow<List<List<OfflineMapPoint>>>(emptyList())
+    val selectedOfflineMapRoads = _selectedOfflineMapRoads.asStateFlow()
+    private var offlineMapJob: Job? = null
 
     // --- 1. SOS Emergency Distress Subsystem ---
     val sosManager = SosManager(
@@ -292,8 +320,8 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                 // which is what makes more than two devices workable.
                 groupManager.onConnectionRequest(request.peerId, advert, request.authCode)
             } else {
-                // Peer on an older build with no advert: fall back to manual confirmation.
-                _pendingRequest.value = request
+                if (_allowIncomingRequests.value) _pendingRequest.value = request
+                else transport.rejectConnection(request.peerId)
             }
         }.launchIn(viewModelScope)
 
@@ -467,13 +495,13 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     val ack = Frame(
                         type = FrameType.ACK,
                         sequence = decodedFrame.sequence,
-                        sessionId = sessionId,
+                        sessionId = decodedFrame.sessionId,
                         timestamp = System.currentTimeMillis().toInt()
                     )
                     transport.send(peerId, ack.toBytes())
                 }
                 FrameType.ACK -> {
-                    reliableMessageManager.onAckReceived(decodedFrame.sessionId, decodedFrame.sequence)
+                    reliableMessageManager.onAckReceived(sessionId, decodedFrame.sequence, peerId)
                 }
                 FrameType.KEY_UPDATE -> {
                     if (decodedFrame.payload.isNotEmpty()) {
@@ -487,6 +515,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     val beacon = SosBeacon.decode(decodedFrame.payload)
                     if (beacon != null) {
                         sosManager.handleIncomingSos(beacon, ingressPeerId = peerId)
+                        if (_disturbanceMode.value) sosManager.silenceAlarm()
                         updateFloatingOverlay(FloatingPttService.STATE_SOS, "SOS!")
                     }
                 }
@@ -872,6 +901,109 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         _pendingRequest.value = null
     }
 
+    fun setDisturbanceMode(enabled: Boolean) {
+        _disturbanceMode.value = enabled
+        requestPrefs.edit().putBoolean("disturbance_mode", enabled).apply()
+    }
+
+    fun setAllowIncomingRequests(enabled: Boolean) {
+        _allowIncomingRequests.value = enabled
+        requestPrefs.edit().putBoolean("allow_incoming", enabled).apply()
+    }
+
+    fun downloadOfflineMap(name: String, latitude: Double, longitude: Double, radiusKm: Double) {
+        if (offlineMapJob?.isActive == true) return
+        _offlineMapError.value = null
+        _offlineMapProgressBytes.value = 0L
+        offlineMapJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                offlineMapRepository.download(name, latitude, longitude, radiusKm) { bytes ->
+                    _offlineMapProgressBytes.value = bytes.takeIf { it >= 0L }
+                }
+                _offlineMapAreas.value = offlineMapRepository.list()
+                _offlineMapProgressBytes.value = null
+            } catch (e: CancellationException) {
+                _offlineMapProgressBytes.value = null
+                throw e
+            } catch (e: Exception) {
+                if (!isActive) return@launch
+                _offlineMapError.value = e.message ?: "Map download failed."
+                _offlineMapProgressBytes.value = null
+            }
+        }
+    }
+
+    fun cancelOfflineMapDownload() {
+        offlineMapJob?.cancel()
+        viewModelScope.launch(Dispatchers.IO) { offlineMapRepository.cancelActiveDownload() }
+        offlineMapProgressBytes.value?.let { _offlineMapProgressBytes.value = null }
+    }
+
+    fun deleteOfflineMap(area: OfflineMapArea) {
+        offlineMapRepository.delete(area)
+        _offlineMapAreas.value = offlineMapRepository.list()
+        if (_selectedOfflineMap.value?.id == area.id) closeOfflineMap()
+    }
+
+    fun openOfflineMap(area: OfflineMapArea) {
+        _selectedOfflineMap.value = area
+        viewModelScope.launch(Dispatchers.IO) { _selectedOfflineMapRoads.value = offlineMapRepository.readRoads(area) }
+    }
+
+    fun closeOfflineMap() {
+        _selectedOfflineMap.value = null
+        _selectedOfflineMapRoads.value = emptyList()
+    }
+
+    fun markTextMessagesRead() {
+        _textMessages.value = _textMessages.value.map { msg ->
+            if (msg.senderMemberId != sessionId) msg.copy(isRead = true) else msg
+        }
+    }
+
+    fun markTextMessageRead(messageId: String) {
+        _textMessages.value = _textMessages.value.map { msg -> if (msg.messageId == messageId) msg.copy(isRead = true) else msg }
+    }
+
+    fun deleteTextMessage(messageId: String) {
+        _textMessages.value = _textMessages.value.filterNot { it.messageId == messageId }
+    }
+
+    fun resendTextMessage(messageId: String) {
+        val old = _textMessages.value.firstOrNull { it.messageId == messageId } ?: return
+        if (old.status != TextDeliveryStatus.FAILED) return
+        val endpoints = _peers.value.filter { it.isConnected }.map { it.id }
+        if (endpoints.isEmpty()) return
+        _textMessages.value = _textMessages.value.map {
+            if (it.messageId == messageId) it.copy(status = TextDeliveryStatus.SENDING) else it
+        }
+        val frame = Frame(
+            type = FrameType.TEXT,
+            payload = old.content.toByteArray(Charsets.UTF_8),
+            sequence = old.sequence,
+            sessionId = old.senderMemberId,
+            timestamp = old.timestampEpochMs.toInt()
+        )
+        endpoints.forEach { endpoint ->
+            reliableMessageManager.sendReliable(
+                memberId = old.senderMemberId,
+                sequence = old.sequence,
+                endpointId = endpoint,
+                packetBytes = frame.toBytes(),
+                onDelivered = {
+                    _textMessages.value = _textMessages.value.map {
+                        if (it.messageId == messageId) it.copy(status = TextDeliveryStatus.DELIVERED) else it
+                    }
+                },
+                onFailed = {
+                    _textMessages.value = _textMessages.value.map {
+                        if (it.messageId == messageId && it.status == TextDeliveryStatus.SENDING) it.copy(status = TextDeliveryStatus.FAILED) else it
+                    }
+                }
+            )
+        }
+    }
+
     fun setLoopbackMode(enabled: Boolean) {
         voiceEngine.isLoopback = enabled
     }
@@ -891,8 +1023,18 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         voiceEngine.setSpeakerphone(newState)
     }
 
+    /** Suppress live received playback while keeping PTT and message history available. */
+    fun toggleMute() {
+        _isMuted.value = !_isMuted.value
+        voiceEngine.isRealtimeMuted = _isMuted.value
+    }
+
     fun setInSession(inSession: Boolean) {
         _isInSession.value = inSession
+        if (!inSession) {
+            _isMuted.value = false
+            voiceEngine.isRealtimeMuted = false
+        }
         if (inSession) {
             startBackgroundService()
             // The handshake is over; a leftover request would send the pairing screen
@@ -987,7 +1129,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             senderMemberId = sessionId,
             senderName = Build.MODEL,
             content = content,
-            status = TextDeliveryStatus.DELIVERED
+            status = if (_peers.value.any { it.isConnected }) TextDeliveryStatus.SENDING else TextDeliveryStatus.FAILED
         )
         _textMessages.value = _textMessages.value + textMsg
 
@@ -999,12 +1141,24 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             sessionId = sessionId,
             timestamp = System.currentTimeMillis().toInt()
         )
-        _peers.value.filter { it.isConnected }.forEach {
+        val connectedPeers = _peers.value.filter { it.isConnected }
+        if (connectedPeers.isEmpty()) return
+        connectedPeers.forEach {
             reliableMessageManager.sendReliable(
                 memberId = sessionId,
                 sequence = seq,
                 endpointId = it.id,
-                packetBytes = frame.toBytes()
+                packetBytes = frame.toBytes(),
+                onDelivered = {
+                    _textMessages.value = _textMessages.value.map { current ->
+                        if (current.messageId == textMsg.messageId) current.copy(status = TextDeliveryStatus.DELIVERED) else current
+                    }
+                },
+                onFailed = {
+                    _textMessages.value = _textMessages.value.map { current ->
+                        if (current.messageId == textMsg.messageId && current.status == TextDeliveryStatus.SENDING) current.copy(status = TextDeliveryStatus.FAILED) else current
+                    }
+                }
             )
         }
     }
