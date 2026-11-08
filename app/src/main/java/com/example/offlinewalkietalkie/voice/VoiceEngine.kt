@@ -36,6 +36,9 @@ class VoiceEngine(
     private val jitterBuffers = ConcurrentHashMap<String, JitterBuffer>()
     private var sequenceNumber = 0
 
+    var onRawPcmCaptured: ((ByteArray) -> Unit)? = null
+    var onRawPcmPlayed: ((ByteArray) -> Unit)? = null
+
     init {
         routeManager?.onInterruptedByCall = {
             stopRecording()
@@ -50,6 +53,7 @@ class VoiceEngine(
             var frameCount = 0
             capture.captureLoop { pcmFrame ->
                 try {
+                    onRawPcmCaptured?.invoke(pcmFrame)
                     val encoded = codec.encode(bytesToShorts(pcmFrame))
                     if (encoded.isNotEmpty()) {
                         sequenceNumber++
@@ -101,7 +105,9 @@ class VoiceEngine(
                 // Concurrent speakers have to be summed into one frame. Writing them back to
                 // back would play them sequentially and drain the track at N times real time.
                 if (due.isNotEmpty()) {
-                    playback.playFrame(shortsToBytes(mixFrames(due)))
+                    val mixedBytes = shortsToBytes(mixFrames(due))
+                    playback.playFrame(mixedBytes)
+                    onRawPcmPlayed?.invoke(mixedBytes)
                 }
 
                 // Fixed-timestep loop for exactly 20ms intervals

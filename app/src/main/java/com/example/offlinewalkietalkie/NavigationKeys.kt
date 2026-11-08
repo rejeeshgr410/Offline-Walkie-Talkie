@@ -14,3 +14,5 @@ import kotlinx.serialization.Serializable
 @Serializable data object JoinChannel : androidx.navigation3.runtime.NavKey
 @Serializable data object GroupLobby : androidx.navigation3.runtime.NavKey
 @Serializable data object GroupRoom : androidx.navigation3.runtime.NavKey
+@Serializable data object RadarCompass : androidx.navigation3.runtime.NavKey
+@Serializable data object VoiceHistory : androidx.navigation3.runtime.NavKey

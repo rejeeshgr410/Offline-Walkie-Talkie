@@ -61,7 +61,9 @@ fun MainNavigation(viewModel: WalkieTalkieViewModel = viewModel()) {
                         onNavigateToContacts = { backStack.add(Contacts) },
                         onNavigateToMessages = { backStack.add(Messages) },
                         onNavigateToCreateChannel = { backStack.add(GroupLobby) },
-                        onNavigateToJoinChannel = { backStack.add(GroupLobby) }
+                        onNavigateToJoinChannel = { backStack.add(GroupLobby) },
+                        onNavigateToRadar = { backStack.add(RadarCompass) },
+                        onNavigateToHistory = { backStack.add(VoiceHistory) }
                     )
                 }
                 entry<NearbyDevices> {
@@ -143,6 +145,18 @@ fun MainNavigation(viewModel: WalkieTalkieViewModel = viewModel()) {
                             backStack.removeLastOrNull()
                             backStack.add(NearbyDevices)
                         },
+                        onBack = { backStack.removeLastOrNull() }
+                    )
+                }
+                entry<RadarCompass> {
+                    RadarScreen(
+                        viewModel = viewModel,
+                        onBack = { backStack.removeLastOrNull() }
+                    )
+                }
+                entry<VoiceHistory> {
+                    VoiceHistoryScreen(
+                        viewModel = viewModel,
                         onBack = { backStack.removeLastOrNull() }
                     )
                 }

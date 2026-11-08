@@ -3,21 +3,35 @@ package com.example.offlinewalkietalkie.ui
 import android.app.Application
 import android.content.Intent
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
+import android.view.KeyEvent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.offlinewalkietalkie.crypto.CryptoManager
+import com.example.offlinewalkietalkie.history.VoiceHistoryManager
+import com.example.offlinewalkietalkie.history.VoiceMessage
 import com.example.offlinewalkietalkie.mesh.RoutingManager
 import com.example.offlinewalkietalkie.protocol.FloorState
 import com.example.offlinewalkietalkie.protocol.Frame
 import com.example.offlinewalkietalkie.protocol.FrameType
+import com.example.offlinewalkietalkie.protocol.PeerLocation
+import com.example.offlinewalkietalkie.protocol.PeerTelemetry
+import com.example.offlinewalkietalkie.protocol.SosBeacon
+import com.example.offlinewalkietalkie.radar.CompassManager
+import com.example.offlinewalkietalkie.radar.LocationProvider
+import com.example.offlinewalkietalkie.service.FloatingPttService
+import com.example.offlinewalkietalkie.sos.SosManager
+import com.example.offlinewalkietalkie.telemetry.TelemetryManager
 import com.example.offlinewalkietalkie.transport.ConnectionRequest
 import com.example.offlinewalkietalkie.transport.LocalIdentity
 import com.example.offlinewalkietalkie.transport.Peer
 import com.example.offlinewalkietalkie.transport.TransportManager
 import com.example.offlinewalkietalkie.transport.TransportType
 import com.example.offlinewalkietalkie.voice.AmrNbCodec
+import com.example.offlinewalkietalkie.voice.HardwarePttManager
 import com.example.offlinewalkietalkie.voice.VoiceEngine
+import java.io.ByteArrayOutputStream
 import com.example.offlinewalkietalkie.channel.*
 import com.example.offlinewalkietalkie.group.DiscoveredGroup
 import com.example.offlinewalkietalkie.group.GroupAdvert
@@ -143,6 +157,68 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     private val _textMessages = MutableStateFlow<List<TextMessage>>(emptyList())
     val textMessages = _textMessages.asStateFlow()
 
+    // --- 1. SOS Emergency Distress Subsystem ---
+    val sosManager = SosManager(
+        localSenderId = sessionId.toString(),
+        localSenderName = localDeviceName,
+        broadcastFrame = { beacon, ingressPeerId -> broadcastSosFrame(beacon, ingressPeerId) },
+        scope = viewModelScope
+    )
+    val isBroadcastingSos = sosManager.isBroadcastingSos
+    val mySosBeacon = sosManager.mySosBeacon
+    val incomingAlerts = sosManager.incomingAlerts
+    val isAlarmPlaying = sosManager.isAlarmPlaying
+
+    // --- 2. Offline GPS Radar & Directional Compass ---
+    val locationProvider = LocationProvider(application)
+    val compassManager = CompassManager(application)
+    val currentLocation = locationProvider.currentLocation
+    val deviceHeading = compassManager.deviceHeading
+
+    private val _peerLocations = MutableStateFlow<Map<String, PeerLocation>>(emptyMap())
+    val peerLocations = _peerLocations.asStateFlow()
+
+    private val _selectedRadarPeerId = MutableStateFlow<String?>(null)
+    val selectedRadarPeerId = _selectedRadarPeerId.asStateFlow()
+
+    // --- 3. Offline Voice Message History & Replay ---
+    val voiceHistoryManager = VoiceHistoryManager(application)
+    val voiceHistory = voiceHistoryManager.history
+    val isHistoryPlaying = voiceHistoryManager.isPlaying
+    val currentlyPlayingHistoryId = voiceHistoryManager.currentlyPlayingId
+
+    private val outgoingAudioBuffer = ByteArrayOutputStream()
+    private var outgoingStartTimeMs = 0L
+
+    private val incomingAudioBuffer = ByteArrayOutputStream()
+    private var incomingStartTimeMs = 0L
+    private var activeIncomingSpeakerId: String? = null
+    private var activeIncomingSpeakerName: String? = null
+
+    // --- 4. Peer Battery & Signal Health Telemetry ---
+    val telemetryManager = TelemetryManager(
+        context = application,
+        localPeerId = sessionId.toString(),
+        broadcastTelemetry = { telemetry -> broadcastTelemetryFrame(telemetry) },
+        scope = viewModelScope
+    )
+    val localBatteryPercent = telemetryManager.localBatteryPercent
+    val isLocalCharging = telemetryManager.isLocalCharging
+    val peerTelemetry = telemetryManager.peerTelemetry
+
+    // --- 5. Screen-Off / Pocket & Hardware Key PTT ---
+    val hardwarePttManager = HardwarePttManager(
+        context = application,
+        onPttPressed = { requestPtt() },
+        onPttReleased = { releasePtt() }
+    )
+    val isVolumeKeyPttEnabled = hardwarePttManager.isVolumeKeyPttEnabled
+    val isBluetoothScoActive = hardwarePttManager.isBluetoothScoActive
+
+    // --- 6. Floating PTT Bubble Service ---
+    private val _isFloatingPttActive = MutableStateFlow(false)
+    val isFloatingPttActive = _isFloatingPttActive.asStateFlow()
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val channelMembers: StateFlow<List<ChannelMember>> = _channelHostController.flatMapLatest { host ->
         host?.membersFlow ?: flowOf(emptyList())
@@ -184,6 +260,29 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         transport.isAdvertising.onEach { _isAdvertising.value = it }.launchIn(viewModelScope)
         transport.isDiscovering.onEach { _isDiscovering.value = it }.launchIn(viewModelScope)
         transport.activeTransportType.onEach { _transportType.value = it }.launchIn(viewModelScope)
+
+        locationProvider.startTracking()
+        compassManager.start()
+        telemetryManager.start()
+
+        viewModelScope.launch {
+            while (isActive) {
+                delay(8000)
+                broadcastCurrentLocation()
+            }
+        }
+
+        voiceEngine.onRawPcmCaptured = { pcm ->
+            synchronized(outgoingAudioBuffer) {
+                outgoingAudioBuffer.write(pcm)
+            }
+        }
+
+        voiceEngine.onRawPcmPlayed = { pcm ->
+            synchronized(incomingAudioBuffer) {
+                incomingAudioBuffer.write(pcm)
+            }
+        }
 
         transport.connectionRequests.onEach { request ->
             val advert = GroupAdvert.decode(request.peerName)
@@ -315,9 +414,40 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                         if (holderId == 0L) {
                             floorController.onFloorFreed()
                             replayBuffer.onTransmissionCompleted()
+
+                            val inPcm = synchronized(incomingAudioBuffer) {
+                                val bytes = incomingAudioBuffer.toByteArray()
+                                incomingAudioBuffer.reset()
+                                bytes
+                            }
+                            val durationMs = System.currentTimeMillis() - incomingStartTimeMs
+                            val speakerId = activeIncomingSpeakerId
+                            val speakerName = activeIncomingSpeakerName
+                            if (inPcm.isNotEmpty() && durationMs > 300 && speakerId != null) {
+                                viewModelScope.launch {
+                                    voiceHistoryManager.saveTransmission(
+                                        senderId = speakerId,
+                                        senderName = speakerName ?: "Peer",
+                                        channelName = _currentChannelName.value,
+                                        isIncoming = true,
+                                        durationMs = durationMs,
+                                        audioPcmBytes = inPcm,
+                                        sampleRate = voiceEngine.sampleRate
+                                    )
+                                }
+                            }
+                            activeIncomingSpeakerId = null
+                            activeIncomingSpeakerName = null
+                            updateFloatingOverlay(FloatingPttService.STATE_IDLE, "")
                         } else {
                             floorController.onFloorHeldByOther(holderId.toString(), holderName)
                             replayBuffer.onTransmissionStarted(holderId, holderName)
+
+                            activeIncomingSpeakerId = holderId.toString()
+                            activeIncomingSpeakerName = holderName
+                            incomingStartTimeMs = System.currentTimeMillis()
+                            synchronized(incomingAudioBuffer) { incomingAudioBuffer.reset() }
+                            updateFloatingOverlay(FloatingPttService.STATE_RECEIVING, holderName)
                         }
                     }
                     shouldForwardControlFrame = true
@@ -352,6 +482,27 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                 }
                 FrameType.GROUP_CONTROL -> {
                     handleGroupControl(peerId, decodedFrame.payload)
+                }
+                FrameType.SOS -> {
+                    val beacon = SosBeacon.decode(decodedFrame.payload)
+                    if (beacon != null) {
+                        sosManager.handleIncomingSos(beacon, ingressPeerId = peerId)
+                        updateFloatingOverlay(FloatingPttService.STATE_SOS, "SOS!")
+                    }
+                }
+                FrameType.LOCATION_RADAR -> {
+                    val loc = PeerLocation.decode(decodedFrame.payload)
+                    if (loc != null) {
+                        val map = _peerLocations.value.toMutableMap()
+                        map[loc.peerId] = loc
+                        _peerLocations.value = map
+                    }
+                }
+                FrameType.TELEMETRY -> {
+                    val tel = PeerTelemetry.decode(decodedFrame.payload)
+                    if (tel != null) {
+                        telemetryManager.handleIncomingTelemetry(tel)
+                    }
                 }
                 else -> {}
             }
@@ -863,6 +1014,10 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         if (current !is FloorState.Idle) return
         if (_isRecording.value) return
 
+        synchronized(outgoingAudioBuffer) { outgoingAudioBuffer.reset() }
+        outgoingStartTimeMs = System.currentTimeMillis()
+        updateFloatingOverlay(FloatingPttService.STATE_TRANSMITTING, "TALKING")
+
         val connected = _peers.value.filter { it.isConnected }
         if (connected.isEmpty() || floorController.mode == SessionFloorMode.DIRECT_1_TO_1) {
             Log.i(TAG, "PTT start (direct) -> ${connected.size} peer(s)")
@@ -892,6 +1047,166 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         _isRecording.value = false
         voiceEngine.stopRecording()
         sendControlFrame(null, FrameType.FLOOR_RELEASE)
+
+        val pcm = synchronized(outgoingAudioBuffer) { outgoingAudioBuffer.toByteArray() }
+        val durationMs = System.currentTimeMillis() - outgoingStartTimeMs
+        if (pcm.isNotEmpty() && durationMs > 300) {
+            viewModelScope.launch {
+                voiceHistoryManager.saveTransmission(
+                    senderId = sessionId.toString(),
+                    senderName = localDeviceName,
+                    channelName = _currentChannelName.value,
+                    isIncoming = false,
+                    durationMs = durationMs,
+                    audioPcmBytes = pcm,
+                    sampleRate = voiceEngine.sampleRate
+                )
+            }
+        }
+        updateFloatingOverlay(FloatingPttService.STATE_IDLE, "")
+    }
+
+    fun startSos(message: String) {
+        sosManager.startSos(
+            message = message,
+            location = currentLocation.value,
+            batteryPercent = localBatteryPercent.value
+        )
+        updateFloatingOverlay(FloatingPttService.STATE_SOS, "SOS!")
+    }
+
+    fun stopSos() {
+        sosManager.stopSos()
+        updateFloatingOverlay(FloatingPttService.STATE_IDLE, "")
+    }
+
+    fun silenceAlarm() = sosManager.silenceAlarm()
+
+    fun dismissSosAlert(senderId: String) = sosManager.dismissAlert(senderId)
+
+    private suspend fun broadcastSosFrame(beacon: SosBeacon, ingressPeerId: String?) {
+        val payload = beacon.toBytes()
+        val frame = Frame(
+            type = FrameType.SOS,
+            flags = 0,
+            hopLimit = beacon.ttl.toByte(),
+            sessionId = sessionId,
+            sequence = controlSequence.incrementAndGet(),
+            timestamp = System.currentTimeMillis().toInt(),
+            payload = payload
+        )
+        val bytes = frame.toBytes()
+        _peers.value.filter { it.isConnected && it.id != ingressPeerId }.forEach {
+            transport.send(it.id, bytes)
+        }
+    }
+
+    private suspend fun broadcastCurrentLocation() {
+        val loc = currentLocation.value ?: return
+        val peerLocation = PeerLocation(
+            peerId = sessionId.toString(),
+            peerName = localDeviceName,
+            latitude = loc.latitude,
+            longitude = loc.longitude,
+            altitude = loc.altitude,
+            batteryPercent = localBatteryPercent.value,
+            timestamp = System.currentTimeMillis()
+        )
+        val payload = peerLocation.toBytes()
+        val frame = Frame(
+            type = FrameType.LOCATION_RADAR,
+            sessionId = sessionId,
+            sequence = controlSequence.incrementAndGet(),
+            timestamp = System.currentTimeMillis().toInt(),
+            payload = payload
+        )
+        val bytes = frame.toBytes()
+        _peers.value.filter { it.isConnected }.forEach {
+            transport.send(it.id, bytes)
+        }
+    }
+
+    private suspend fun broadcastTelemetryFrame(telemetry: PeerTelemetry) {
+        val frame = Frame(
+            type = FrameType.TELEMETRY,
+            sessionId = sessionId,
+            sequence = controlSequence.incrementAndGet(),
+            timestamp = System.currentTimeMillis().toInt(),
+            payload = telemetry.toBytes()
+        )
+        val bytes = frame.toBytes()
+        _peers.value.filter { it.isConnected }.forEach {
+            transport.send(it.id, bytes)
+        }
+    }
+
+    fun selectRadarPeer(peerId: String?) {
+        _selectedRadarPeerId.value = peerId
+    }
+
+    fun replayMessage(message: VoiceMessage) {
+        voiceHistoryManager.replayMessage(message)
+    }
+
+    fun replayLastMessage() {
+        voiceHistoryManager.replayLastMessage()
+    }
+
+    fun stopReplay() {
+        voiceHistoryManager.stopReplay()
+    }
+
+    fun setVolumeKeyPttEnabled(enabled: Boolean) {
+        hardwarePttManager.setVolumeKeyPttEnabled(enabled)
+    }
+
+    fun toggleBluetoothSco() {
+        if (isBluetoothScoActive.value) {
+            hardwarePttManager.stopBluetoothSco()
+        } else {
+            hardwarePttManager.startBluetoothSco()
+        }
+    }
+
+    fun startFloatingPtt(): Boolean {
+        val app = getApplication<Application>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(app)) {
+            return false
+        }
+        val intent = Intent(app, FloatingPttService::class.java).apply {
+            action = FloatingPttService.ACTION_START
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            app.startForegroundService(intent)
+        } else {
+            app.startService(intent)
+        }
+        _isFloatingPttActive.value = true
+        return true
+    }
+
+    fun stopFloatingPtt() {
+        val app = getApplication<Application>()
+        val intent = Intent(app, FloatingPttService::class.java).apply {
+            action = FloatingPttService.ACTION_STOP
+        }
+        app.startService(intent)
+        _isFloatingPttActive.value = false
+    }
+
+    private fun updateFloatingOverlay(state: String, speakerName: String) {
+        if (!_isFloatingPttActive.value) return
+        try {
+            val app = getApplication<Application>()
+            val intent = Intent(app, FloatingPttService::class.java).apply {
+                action = FloatingPttService.ACTION_UPDATE_STATE
+                putExtra(FloatingPttService.EXTRA_STATE, state)
+                putExtra(FloatingPttService.EXTRA_SPEAKER_NAME, speakerName)
+            }
+            app.startService(intent)
+        } catch (e: Exception) {
+            // Ignore
+        }
     }
 
     private fun startBackgroundService() {
@@ -931,6 +1246,13 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         voiceEngine.stopRecording()
         voiceEngine.stopPlayback()
         voiceEngine.routeManager?.clearRouting()
+        locationProvider.stopTracking()
+        compassManager.stop()
+        telemetryManager.stop()
+        hardwarePttManager.stopBluetoothSco()
+        stopFloatingPtt()
+        sosManager.silenceAlarm()
+        voiceHistoryManager.stopReplay()
         teardownScope.launch { transport.stop() }
     }
 

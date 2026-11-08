@@ -125,6 +125,7 @@ class TransportManager(private val context: Context) {
 
     suspend fun stop() {
         nearbyTransport.stop()
+        bleGattTransport.stop()
         bleL2capTransport.stop()
         wifiAwareTransport.stop()
         bluetoothTransport.stop()

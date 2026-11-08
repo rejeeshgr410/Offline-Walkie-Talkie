@@ -29,7 +29,10 @@ enum class FrameType(val value: Byte) {
     ACK(22),
     TREE_PLAN(23),
     TREE_ACK(24),
-    GROUP_CONTROL(25);
+    GROUP_CONTROL(25),
+    SOS(26),
+    LOCATION_RADAR(27),
+    TELEMETRY(28);
 
     companion object {
         fun fromValue(value: Byte): FrameType? = values().find { it.value == value }

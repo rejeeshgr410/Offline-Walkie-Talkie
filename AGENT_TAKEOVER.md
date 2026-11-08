@@ -33,6 +33,23 @@
   - `NotificationController.kt`: Rich notifications with quick PTT actions.
 - **User Interface (`ui/`)**:
   - `MainScreen.kt`, `PttOrb.kt`, `GlassSurface.kt`, `WalkieTalkieViewModel.kt`: Liquid glass visual styling, 176dp illuminated PTT Orb, audio visualization waveforms, RTL support (Arabic), and contact verification views.
+  - `RadarScreen.kt`: Offline relative directional radar scope with dynamic distance range rings, cardinal north pointer, peer blips, and target tracking.
+  - `VoiceHistoryScreen.kt`: Chronological offline voice transmission timeline with duration formatting, sender badges, and 1-tap PCM replay.
+  - `SosDialog.kt`: Emergency distress broadcast modal and high-priority distress alert banner with direct SOS radar tracking.
+- **Offline SOS Distress Subsystem (`sos/`)**:
+  - `SosManager.kt`: Offline SOS beacon broadcast loop, multi-hop mesh forwarding with TTL decrement, deduplication, and siren control.
+  - `EmergencyAlarmPlayer.kt`: Hardware-independent dual-frequency PCM siren generator (850 Hz / 1100 Hz alternating pattern) on `AudioTrack` max volume stream.
+- **Radar & Compass Subsystem (`radar/`)**:
+  - `RadarMath.kt`: Haversine great-circle distance, forward azimuth bearing calculation, relative bearing against heading, and low-pass angular filter.
+  - `CompassManager.kt`: Sensor fusion (`TYPE_ROTATION_VECTOR` with fallback to Accelerometer + Magnetometer) with azimuth stabilization.
+  - `LocationProvider.kt`: Offline GPS/network location listener acquiring high-accuracy offline fix without external map services.
+- **Offline Voice History & Replay (`history/`)**:
+  - `VoiceHistoryManager.kt`: Automatic rolling 50-message persistence of inbound and outbound raw PCM transmissions with anti-pop `VolumeShaper` playback.
+- **Peer Telemetry (`telemetry/`)**:
+  - `TelemetryManager.kt`: Broadcasts local battery percentage and BLE RSSI levels to peers; displays battery health badges on contact avatars and radar nodes.
+- **System Overlay & Hardware PTT (`service/` & `voice/`)**:
+  - `FloatingPttService.kt`: Draggable `SYSTEM_ALERT_WINDOW` floating PTT orb over other apps with real-time transmit/receive visual glow and tap-to-talk.
+  - `HardwarePttManager.kt`: Interception of Volume Down and Headset Hook hardware keys for screen-off PTT with haptic vibration feedback and Bluetooth SCO management.
 
 ---
 

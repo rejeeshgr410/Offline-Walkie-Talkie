@@ -258,7 +258,9 @@ fun HomeScreen(
     onNavigateToContacts: () -> Unit,
     onNavigateToMessages: () -> Unit,
     onNavigateToCreateChannel: () -> Unit,
-    onNavigateToJoinChannel: () -> Unit
+    onNavigateToJoinChannel: () -> Unit,
+    onNavigateToRadar: () -> Unit = {},
+    onNavigateToHistory: () -> Unit = {}
 ) {
     val peers by viewModel.peers.collectAsState()
     val floorState by viewModel.floorState.collectAsState()
@@ -271,6 +273,20 @@ fun HomeScreen(
     val securedPeerCount by viewModel.securedPeerCount.collectAsState()
     val transportType by viewModel.transportType.collectAsState()
     val connectedPeers = peers.filter { it.isConnected }
+
+    var showSosModal by remember { mutableStateOf(false) }
+    val incomingAlerts by viewModel.incomingAlerts.collectAsState()
+    val isAlarmPlaying by viewModel.isAlarmPlaying.collectAsState()
+    val isBroadcastingSos by viewModel.isBroadcastingSos.collectAsState()
+    val peerTelemetry by viewModel.peerTelemetry.collectAsState()
+    val localBatteryPercent by viewModel.localBatteryPercent.collectAsState()
+
+    if (showSosModal) {
+        SosBroadcastModal(
+            onDismiss = { showSosModal = false },
+            onStartSos = { msg -> viewModel.startSos(msg) }
+        )
+    }
 
     val transportTypeName = when (transportType) {
         com.example.offlinewalkietalkie.transport.TransportType.BLE_GATT -> "BLE Long-Range (Coded PHY)"
@@ -294,11 +310,32 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // 1. Top Bar & Lock-up
-            TopHeaderBar(
-                connectedCount = connectedPeers.size,
-                isOutdoorMode = isOutdoorMode
-            )
+            Column {
+                // 1. Top Bar & Lock-up
+                TopHeaderBar(
+                    connectedCount = connectedPeers.size,
+                    isOutdoorMode = isOutdoorMode,
+                    isBroadcastingSos = isBroadcastingSos,
+                    onOpenSos = {
+                        if (isBroadcastingSos) {
+                            viewModel.stopSos()
+                        } else {
+                            showSosModal = true
+                        }
+                    },
+                    onOpenRadar = onNavigateToRadar,
+                    onOpenHistory = onNavigateToHistory
+                )
+
+                // SOS Emergency Alert Banner
+                SosAlertBanner(
+                    alerts = incomingAlerts,
+                    isAlarmPlaying = isAlarmPlaying,
+                    onSilenceAlarm = { viewModel.silenceAlarm() },
+                    onDismissAlert = { id -> viewModel.dismissSosAlert(id) },
+                    onNavigateToRadar = onNavigateToRadar
+                )
+            }
 
             // 2. Main Content (Active Session vs Idle)
             if (isInSession) {
@@ -311,16 +348,18 @@ fun HomeScreen(
                     isRelayModeActive = isRelayModeActive,
                     securedPeerCount = securedPeerCount,
                     transportTypeName = transportTypeName,
+                    peerTelemetry = peerTelemetry,
+                    localBatteryPercent = localBatteryPercent,
                     onToggleSpeaker = { viewModel.toggleAudioRoute() },
                     onToggleRelay = { viewModel.toggleRelayMode() },
                     onPttStart = { viewModel.requestPtt() },
                     onPttEnd = { viewModel.releasePtt() },
+                    onReplayLast = { viewModel.replayLastMessage() },
+                    onNavigateToRadar = onNavigateToRadar,
                     onNavigateToNearby = onNavigateToNearby,
                     onNavigateToPairing = onNavigateToPairing,
                     onNavigateToSettings = onNavigateToSettings,
                     onNavigateToContacts = onNavigateToContacts,
-                    // Leaving has to drop group membership too, otherwise the roster keeps
-                    // this device and peers go on trying to reconnect to it.
                     onLeaveSession = { viewModel.leaveGroup() }
                 )
             } else {
@@ -355,12 +394,16 @@ fun HomeScreen(
 @Composable
 private fun TopHeaderBar(
     connectedCount: Int,
-    isOutdoorMode: Boolean
+    isOutdoorMode: Boolean,
+    isBroadcastingSos: Boolean = false,
+    onOpenSos: () -> Unit = {},
+    onOpenRadar: () -> Unit = {},
+    onOpenHistory: () -> Unit = {}
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp),
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -368,8 +411,8 @@ private fun TopHeaderBar(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
-                    .size(38.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(Brush.linearGradient(listOf(BrightCyan, MintGreen))),
                 contentAlignment = Alignment.Center
             ) {
@@ -377,15 +420,15 @@ private fun TopHeaderBar(
                     imageVector = Icons.Default.Mic,
                     contentDescription = null,
                     tint = DeepInk,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             Column {
                 Text(
                     text = stringResource(R.string.app_name),
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 18.sp,
+                    fontSize = 17.sp,
                     color = Color.White
                 )
                 Text(
@@ -397,28 +440,53 @@ private fun TopHeaderBar(
             }
         }
 
-        // Status capsule pill
-        GlassSurface(
-            cornerRadius = 20.dp,
-            isOutdoorMode = isOutdoorMode,
-            modifier = Modifier.padding(2.dp)
+        // Action Buttons: Radar, History, SOS
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            IconButton(
+                onClick = onOpenRadar,
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.12f))
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(MintGreen)
+                Icon(
+                    imageVector = Icons.Default.Navigation,
+                    contentDescription = "Radar",
+                    tint = BrightCyan,
+                    modifier = Modifier.size(18.dp)
                 )
+            }
+
+            IconButton(
+                onClick = onOpenHistory,
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.12f))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.History,
+                    contentDescription = "History",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            Button(
+                onClick = onOpenSos,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isBroadcastingSos) Color(0xFFFFEB3B) else Color(0xFFD32F2F)
+                ),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                modifier = Modifier.height(32.dp)
+            ) {
                 Text(
-                    text = if (connectedCount > 0) "${stringResource(R.string.secure)} · $connectedCount"
-                           else stringResource(R.string.offline_ready),
-                    color = MintGreen,
-                    fontWeight = FontWeight.Bold,
+                    text = if (isBroadcastingSos) "SOS ON" else "SOS",
+                    color = if (isBroadcastingSos) Color.Black else Color.White,
+                    fontWeight = FontWeight.ExtraBold,
                     fontSize = 11.sp
                 )
             }
@@ -436,10 +504,14 @@ private fun ActiveSessionContent(
     isRelayModeActive: Boolean,
     securedPeerCount: Int,
     transportTypeName: String,
+    peerTelemetry: Map<String, com.example.offlinewalkietalkie.protocol.PeerTelemetry> = emptyMap(),
+    localBatteryPercent: Int = 100,
     onToggleSpeaker: () -> Unit,
     onToggleRelay: () -> Unit,
     onPttStart: () -> Unit,
     onPttEnd: () -> Unit,
+    onReplayLast: () -> Unit = {},
+    onNavigateToRadar: () -> Unit = {},
     onNavigateToNearby: () -> Unit,
     onNavigateToPairing: () -> Unit,
     onNavigateToSettings: () -> Unit,
@@ -528,18 +600,21 @@ private fun ActiveSessionContent(
                         initials = "ME",
                         isSpeaking = isYouSpeaking,
                         isOnline = true,
-                        isRelay = false
+                        isRelay = false,
+                        batteryPercent = localBatteryPercent
                     )
 
                     // Connected peers
                     connectedPeers.forEach { peer ->
                         val isThisPeerSpeaking = floorState is FloorState.HeldByOther && floorState.peerId == peer.id
+                        val peerBatt = peerTelemetry[peer.id]?.batteryPercent
                         AvatarBadge(
                             name = peer.name.take(6),
                             initials = peer.name.take(2).uppercase(),
                             isSpeaking = isThisPeerSpeaking,
                             isOnline = peer.isConnected,
-                            isRelay = false
+                            isRelay = false,
+                            batteryPercent = peerBatt
                         )
                     }
                 }
@@ -686,6 +761,48 @@ private fun ActiveSessionContent(
             )
         }
 
+        // Replay Last & Radar Action Buttons
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Button(
+                onClick = onReplayLast,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(42.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Replay,
+                    contentDescription = null,
+                    tint = BrightCyan,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(text = "Replay Last", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+            }
+
+            Button(
+                onClick = onNavigateToRadar,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(42.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Navigation,
+                    contentDescription = null,
+                    tint = MintGreen,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(text = "Radar View", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+            }
+        }
+
         // Leave Session button
         OutlinedButton(
             onClick = onLeaveSession,
@@ -794,7 +911,8 @@ private fun AvatarBadge(
     initials: String,
     isSpeaking: Boolean,
     isOnline: Boolean,
-    isRelay: Boolean
+    isRelay: Boolean,
+    batteryPercent: Int? = null
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -860,6 +978,19 @@ private fun AvatarBadge(
             color = if (isSpeaking) ElectricAqua else Color(0xFFCBD5E1),
             fontWeight = if (isSpeaking) FontWeight.Bold else FontWeight.Normal
         )
+        if (batteryPercent != null && batteryPercent in 0..100) {
+            val battColor = when {
+                batteryPercent > 50 -> MintGreen
+                batteryPercent > 20 -> Color.Yellow
+                else -> Color(0xFFEF5350)
+            }
+            Text(
+                text = "🔋$batteryPercent%",
+                fontSize = 9.sp,
+                color = battColor,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
@@ -1002,6 +1133,7 @@ fun NearbyDevicesScreen(
     val isDiscovering by viewModel.isDiscovering.collectAsState()
     val transportError by viewModel.transportError.collectAsState()
     val transportType by viewModel.transportType.collectAsState()
+    val peerTelemetry by viewModel.peerTelemetry.collectAsState()
 
     val wifiManager = remember {
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
@@ -1234,12 +1366,29 @@ fun NearbyDevicesScreen(
                                     }
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column {
-                                        Text(
-                                            text = peer.name,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White,
-                                            fontSize = 14.sp
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = peer.name,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White,
+                                                fontSize = 14.sp
+                                            )
+                                            val batt = peerTelemetry[peer.id]?.batteryPercent
+                                            if (batt != null && batt in 0..100) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                val battColor = when {
+                                                    batt > 50 -> MintGreen
+                                                    batt > 20 -> Color.Yellow
+                                                    else -> Color(0xFFEF5350)
+                                                }
+                                                Text(
+                                                    text = "🔋$batt%",
+                                                    fontSize = 10.sp,
+                                                    color = battColor,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
                                         Text(
                                             text = "ID: ${peer.id.take(8)}",
                                             color = Color(0xFF94A3B8),
@@ -1538,6 +1687,101 @@ fun SettingsScreen(
                             onCheckedChange = { viewModel.toggleAudioRoute() }
                         )
                     }
+
+                    Divider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0x22FFFFFF))
+
+                    // Floating PTT Bubble (SYSTEM_ALERT_WINDOW)
+                    val isFloatingActive by viewModel.isFloatingPttActive.collectAsState()
+                    val context = LocalContext.current
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Floating PTT Orb",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Movable talk button over Maps & camera",
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 11.sp
+                            )
+                        }
+                        Switch(
+                            checked = isFloatingActive,
+                            onCheckedChange = { enable ->
+                                if (enable) {
+                                    val success = viewModel.startFloatingPtt()
+                                    if (!success) {
+                                        val intent = Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    }
+                                } else {
+                                    viewModel.stopFloatingPtt()
+                                }
+                            }
+                        )
+                    }
+
+                    Divider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0x22FFFFFF))
+
+                    // Pocket Mode: Hardware Volume Key PTT
+                    val isVolumePtt by viewModel.isVolumeKeyPttEnabled.collectAsState()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Pocket Volume Key PTT",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Hold Volume Down to talk when screen is locked",
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 11.sp
+                            )
+                        }
+                        Switch(
+                            checked = isVolumePtt,
+                            onCheckedChange = { viewModel.setVolumeKeyPttEnabled(it) }
+                        )
+                    }
+
+                    Divider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0x22FFFFFF))
+
+                    // Bluetooth SCO Headset
+                    val isScoActive by viewModel.isBluetoothScoActive.collectAsState()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Bluetooth SCO Headset",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Route microphone and voice to Bluetooth headset",
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 11.sp
+                            )
+                        }
+                        Switch(
+                            checked = isScoActive,
+                            onCheckedChange = { viewModel.toggleBluetoothSco() }
+                        )
+                    }
                 }
             }
         }
@@ -1551,6 +1795,7 @@ fun ContactsScreen(
 ) {
     val peers by viewModel.peers.collectAsState()
     val isOutdoorMode by viewModel.isOutdoorMode.collectAsState()
+    val peerTelemetry by viewModel.peerTelemetry.collectAsState()
 
     Box(
         modifier = Modifier
@@ -1614,6 +1859,21 @@ fun ContactsScreen(
                             ) {
                                 Text(text = peer.name, color = Color.White, fontWeight = FontWeight.SemiBold)
                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val batt = peerTelemetry[peer.id]?.batteryPercent
+                                    if (batt != null && batt in 0..100) {
+                                        val battColor = when {
+                                            batt > 50 -> MintGreen
+                                            batt > 20 -> Color.Yellow
+                                            else -> Color(0xFFEF5350)
+                                        }
+                                        Text(
+                                            text = "🔋$batt%",
+                                            fontSize = 11.sp,
+                                            color = battColor,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
                                     Icon(
                                         imageVector = Icons.Default.Verified,
                                         contentDescription = "Verified",
