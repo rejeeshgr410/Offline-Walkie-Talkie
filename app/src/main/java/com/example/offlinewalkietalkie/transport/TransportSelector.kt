@@ -19,8 +19,16 @@ object TransportSelector {
     fun selectTransport(
         context: Context,
         isChannel: Boolean = false,
-        isRelayMesh: Boolean = false
+        isRelayMesh: Boolean = false,
+        preferBleGatt: Boolean = true
     ): TransportType {
+        // Phase 3: BLE GATT (Long-Range BLE with Coded PHY) is primary for Walkie-Talkie
+        // when BLE is supported, offering sub-200ms connection, up to 1km range, low battery,
+        // and zero Wi-Fi disruption.
+        if (preferBleGatt && CapabilityManager.isBleSupported(context)) {
+            return TransportType.BLE_GATT
+        }
+
         // 1. Google Play Services available -> Nearby Connections
         if (CapabilityManager.isGooglePlayServicesAvailable(context)) {
             return TransportType.NEARBY_CONNECTIONS

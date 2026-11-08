@@ -273,6 +273,7 @@ fun HomeScreen(
     val connectedPeers = peers.filter { it.isConnected }
 
     val transportTypeName = when (transportType) {
+        com.example.offlinewalkietalkie.transport.TransportType.BLE_GATT -> "BLE Long-Range (Coded PHY)"
         com.example.offlinewalkietalkie.transport.TransportType.NEARBY_CONNECTIONS -> "Nearby Connections"
         com.example.offlinewalkietalkie.transport.TransportType.BLE_L2CAP -> "BLE L2CAP"
         com.example.offlinewalkietalkie.transport.TransportType.WIFI_AWARE -> "Wi-Fi Aware"

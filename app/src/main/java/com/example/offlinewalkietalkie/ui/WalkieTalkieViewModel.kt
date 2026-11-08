@@ -16,6 +16,7 @@ import com.example.offlinewalkietalkie.transport.LocalIdentity
 import com.example.offlinewalkietalkie.transport.Peer
 import com.example.offlinewalkietalkie.transport.TransportManager
 import com.example.offlinewalkietalkie.transport.TransportType
+import com.example.offlinewalkietalkie.voice.AmrNbCodec
 import com.example.offlinewalkietalkie.voice.VoiceEngine
 import com.example.offlinewalkietalkie.channel.*
 import com.example.offlinewalkietalkie.group.DiscoveredGroup
@@ -50,7 +51,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     private val transport = TransportManager(application)
     private val routingManager = RoutingManager(transport)
-    private val voiceEngine = VoiceEngine(context = application)
+    private val voiceEngine = VoiceEngine(codec = AmrNbCodec(), context = application)
     private val cryptoManager = CryptoManager()
 
     private val sessionId: Long = System.currentTimeMillis()
@@ -427,15 +428,14 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun handleFloorGrant(peerId: String) {
-        // Only a grant we actually asked for may open the microphone. Without this guard a
-        // direct 1:1 grant would start a second capture loop on top of the running one.
-        if (_isRecording.value) return
         if (floorController.floorState.value !is FloorState.Requesting) return
 
         floorController.onFloorGranted()
-        _isRecording.value = true
-        voiceEngine.startRecording { sequence, encodedFrame ->
-            broadcastVoiceFrame(sequence, encodedFrame)
+        if (!_isRecording.value) {
+            _isRecording.value = true
+            voiceEngine.startRecording { sequence, encodedFrame ->
+                broadcastVoiceFrame(sequence, encodedFrame)
+            }
         }
     }
 
@@ -660,6 +660,26 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    fun switchToBleGattTransport() {
+        Log.i(TAG, "Switching to BLE Long-Range GATT transport (Vivo-style)")
+        viewModelScope.launch {
+            transport.stop()
+            transport.setTransportType(TransportType.BLE_GATT)
+            _transportType.value = TransportType.BLE_GATT
+            transport.startSymmetricDiscovery(LocalIdentity(localDeviceName))
+        }
+    }
+
+    fun switchToNearbyTransport() {
+        Log.i(TAG, "Switching to Google Nearby Connections transport")
+        viewModelScope.launch {
+            transport.stop()
+            transport.setTransportType(TransportType.NEARBY_CONNECTIONS)
+            _transportType.value = TransportType.NEARBY_CONNECTIONS
+            transport.startSymmetricDiscovery(LocalIdentity(localDeviceName))
+        }
+    }
+
     fun switchToBleTransport() {
         Log.i(TAG, "Switching to BLE L2CAP transport (Wi-Fi off fallback)")
         viewModelScope.launch {
@@ -857,7 +877,10 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             sendControlFrame(null, FrameType.FLOOR_REQUEST)
             _isRecording.value = true
             voiceEngine.startRecording { sequence, encodedFrame ->
-                floorController.onAudioCaptured(sequence, System.currentTimeMillis(), encodedFrame)
+                val sendLive = floorController.onAudioCaptured(sequence, System.currentTimeMillis(), encodedFrame)
+                if (sendLive) {
+                    broadcastVoiceFrame(sequence, encodedFrame)
+                }
             }
         }
     }
