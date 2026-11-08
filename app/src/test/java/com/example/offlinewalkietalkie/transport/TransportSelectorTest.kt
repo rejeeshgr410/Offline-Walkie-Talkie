@@ -21,6 +21,7 @@ class TransportSelectorTest {
     fun testTransportEnumCompleteness() {
         val types = TransportType.values().toList()
         assertTrue("Must include NEARBY_CONNECTIONS", types.contains(TransportType.NEARBY_CONNECTIONS))
+        assertTrue("Must include BLE_GATT", types.contains(TransportType.BLE_GATT))
         assertTrue("Must include BLE_L2CAP", types.contains(TransportType.BLE_L2CAP))
         assertTrue("Must include WIFI_AWARE", types.contains(TransportType.WIFI_AWARE))
         assertTrue("Must include WIFI_DIRECT", types.contains(TransportType.WIFI_DIRECT))

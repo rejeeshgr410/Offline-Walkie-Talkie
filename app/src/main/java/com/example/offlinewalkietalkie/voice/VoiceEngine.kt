@@ -5,10 +5,11 @@ import android.util.Log
 import kotlinx.coroutines.*
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Section 6 VoiceEngine.
- * Orchestrates AudioCapture, OpusCodec, AudioPlayback, Adaptive JitterBuffer,
+ * Orchestrates AudioCapture, AudioCodec (OpusCodec / AmrNbCodec), AudioPlayback, Adaptive JitterBuffer,
  * and AudioRouteManager (audio focus & speakerphone routing).
  */
 class VoiceEngine(
@@ -18,8 +19,9 @@ class VoiceEngine(
     private val TAG = "TL/Voice"
     val routeManager: AudioRouteManager? = context?.let { AudioRouteManager(it) }
 
-    private val capture = AudioCapture()
-    private val playback = AudioPlayback()
+    val sampleRate: Int = if (codec is AmrNbCodec) codec.sampleRate else AudioCapture.SAMPLE_RATE
+    private val capture = AudioCapture(sampleRate = sampleRate)
+    private val playback = AudioPlayback(sampleRate = sampleRate)
     
     private var captureJob: Job? = null
     private var playbackJob: Job? = null
@@ -31,7 +33,7 @@ class VoiceEngine(
             if (value) startPlayback()
         }
 
-    private val jitterBuffers = mutableMapOf<String, JitterBuffer>()
+    private val jitterBuffers = ConcurrentHashMap<String, JitterBuffer>()
     private var sequenceNumber = 0
 
     init {
@@ -123,7 +125,9 @@ class VoiceEngine(
         senderTimestampMs: Long = 0L
     ) {
         startPlayback()
-        val jb = jitterBuffers.getOrPut(peerId) { JitterBuffer(OpusCodec()) }
+        val jb = jitterBuffers.getOrPut(peerId) { 
+            JitterBuffer(if (codec is AmrNbCodec) AmrNbCodec() else OpusCodec()) 
+        }
         jb.push(sequence, encodedOpus, senderTimestampMs)
     }
 

@@ -25,3 +25,4 @@ keystore.properties
 /.kotlin
 /app/build
 /.idea
+/scratch

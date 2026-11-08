@@ -3,9 +3,13 @@ package com.example.offlinewalkietalkie.voice
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.media.VolumeShaper
+import android.os.Build
 import android.util.Log
 
-class AudioPlayback {
+class AudioPlayback(
+    val sampleRate: Int = SAMPLE_RATE
+) {
     companion object {
         private const val TAG = "TL/AudioPlayback"
         const val SAMPLE_RATE = 48000
@@ -21,7 +25,8 @@ class AudioPlayback {
     private val lock = Any()
 
     private var audioTrack: AudioTrack? = null
-    private val minBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+    private var volumeShaper: VolumeShaper? = null
+    private val minBufferSize = AudioTrack.getMinBufferSize(sampleRate, CHANNEL_CONFIG, AUDIO_FORMAT)
     private var frameCount = 0
     private var skippedFrameCount = 0
     private var currentUseSpeaker: Boolean? = null
@@ -33,8 +38,10 @@ class AudioPlayback {
             }
             releaseLocked()
             try {
-                val safeMin = if (minBufferSize > 0) minBufferSize else 3840
-                val bufferSize = maxOf(safeMin, 960 * 2 * 2)
+                val samplesPer20ms = (sampleRate * 0.02).toInt()
+                val frameBytes = samplesPer20ms * 2
+                val safeMin = if (minBufferSize > 0) minBufferSize else frameBytes * 4
+                val bufferSize = maxOf(safeMin, frameBytes * 4)
 
                 // Samsung and some other OEMs ignore setCommunicationDevice for speaker routing
                 // when the track uses USAGE_VOICE_COMMUNICATION, so speaker mode goes out as media.
@@ -58,7 +65,7 @@ class AudioPlayback {
                     )
                     .setAudioFormat(
                         AudioFormat.Builder()
-                            .setSampleRate(SAMPLE_RATE)
+                            .setSampleRate(sampleRate)
                             .setChannelMask(CHANNEL_CONFIG)
                             .setEncoding(AUDIO_FORMAT)
                             .build()
@@ -68,6 +75,23 @@ class AudioPlayback {
                     .build()
 
                 track.play()
+
+                // Apply smooth S-curve VolumeShaper (Vivo anti-pop technique)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        val config = VolumeShaper.Configuration.Builder()
+                            .setCurve(floatArrayOf(0.0f, 1.0f), floatArrayOf(0.0f, 1.0f))
+                            .setDuration(25) // 25ms smooth ramp
+                            .setInterpolatorType(VolumeShaper.Configuration.INTERPOLATOR_TYPE_CUBIC)
+                            .build()
+                        val shaper = track.createVolumeShaper(config)
+                        shaper.apply(VolumeShaper.Operation.PLAY)
+                        volumeShaper = shaper
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "VolumeShaper init skipped: ${e.message}")
+                    }
+                }
+
                 audioTrack = track
                 frameCount = 0
                 skippedFrameCount = 0
@@ -75,7 +99,7 @@ class AudioPlayback {
                 Log.i(
                     TAG,
                     "AudioTrack started: useSpeaker=$useSpeaker usage=${if (useSpeaker) "MEDIA" else "VOICE_COMMUNICATION"} " +
-                        "state=${track.state} playState=${track.playState} bufferSize=$bufferSize sessionId=${track.audioSessionId}"
+                        "state=${track.state} playState=${track.playState} sampleRate=$sampleRate bufferSize=$bufferSize sessionId=${track.audioSessionId}"
                 )
             } catch (e: Throwable) {
                 Log.e(TAG, "AudioTrack start FAILED", e)
@@ -118,6 +142,12 @@ class AudioPlayback {
         val track = audioTrack ?: return
         audioTrack = null
         currentUseSpeaker = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                volumeShaper?.apply(VolumeShaper.Operation.REVERSE)
+            } catch (e: Throwable) {}
+        }
+        volumeShaper = null
         try {
             track.stop()
         } catch (e: Throwable) {

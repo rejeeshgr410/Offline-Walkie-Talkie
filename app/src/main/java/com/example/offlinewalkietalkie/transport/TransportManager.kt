@@ -2,6 +2,7 @@ package com.example.offlinewalkietalkie.transport
 
 import android.content.Context
 import android.util.Log
+import com.example.offlinewalkietalkie.transport.bluetooth.BleGattTransport
 import com.example.offlinewalkietalkie.transport.bluetooth.BleL2capTransport
 import com.example.offlinewalkietalkie.transport.bluetooth.BluetoothClassicTransport
 import com.example.offlinewalkietalkie.transport.nearby.NearbyConnectionsTransport
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 
 enum class TransportType {
     NEARBY_CONNECTIONS,
+    BLE_GATT,
     BLE_L2CAP,
     WIFI_AWARE,
     WIFI_DIRECT,
@@ -29,6 +31,7 @@ class TransportManager(private val context: Context) {
     }
 
     private val nearbyTransport = NearbyConnectionsTransport(context)
+    private val bleGattTransport = BleGattTransport(context)
     private val bleL2capTransport = BleL2capTransport(context)
     private val wifiAwareTransport = WifiAwareTransport(context)
     private val bluetoothTransport = BluetoothClassicTransport(context)
@@ -45,6 +48,7 @@ class TransportManager(private val context: Context) {
 
     private fun transportFor(type: TransportType): Transport = when (type) {
         TransportType.NEARBY_CONNECTIONS -> nearbyTransport
+        TransportType.BLE_GATT -> bleGattTransport
         TransportType.BLE_L2CAP -> bleL2capTransport
         TransportType.WIFI_AWARE -> wifiAwareTransport
         TransportType.BLUETOOTH_CLASSIC -> bluetoothTransport

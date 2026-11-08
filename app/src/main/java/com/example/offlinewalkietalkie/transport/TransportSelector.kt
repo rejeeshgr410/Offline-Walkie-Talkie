@@ -67,6 +67,7 @@ object TransportSelector {
     fun isTransportAvailable(context: Context, type: TransportType): Boolean {
         return when (type) {
             TransportType.NEARBY_CONNECTIONS -> CapabilityManager.isGooglePlayServicesAvailable(context)
+            TransportType.BLE_GATT -> CapabilityManager.isBleSupported(context)
             TransportType.BLE_L2CAP -> CapabilityManager.isBleSupported(context)
             TransportType.WIFI_AWARE -> CapabilityManager.isWifiAwareSupported(context)
             TransportType.WIFI_DIRECT -> CapabilityManager.isWifiDirectSupported(context)
@@ -77,6 +78,7 @@ object TransportSelector {
     fun getDisplayName(type: TransportType): String {
         return when (type) {
             TransportType.NEARBY_CONNECTIONS -> "Google Nearby Connections (Offline)"
+            TransportType.BLE_GATT -> "Bluetooth LE Long-Range (GATT / Coded PHY)"
             TransportType.BLE_L2CAP -> "Bluetooth LE (L2CAP CoC Native)"
             TransportType.WIFI_AWARE -> "Wi-Fi Aware (NAN P2P)"
             TransportType.WIFI_DIRECT -> "Wi-Fi Direct (P2P Group)"
