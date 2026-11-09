@@ -93,6 +93,20 @@ class JitterBuffer(
             return
         }
 
+        // P1-01 Remediation: If codec produced 40ms frame (320 samples for Codec 2 mode 1600),
+        // cleanly split into two 20ms frames (160 samples each) to maintain uniform 20ms playback
+        // pacing across all codecs without timing jitter or drift.
+        if (pcm.size == 320) {
+            val half1 = pcm.copyOfRange(0, 160)
+            val half2 = pcm.copyOfRange(160, 320)
+            val subSeq1 = sequence * 2
+            val subSeq2 = sequence * 2 + 1
+            buffer[subSeq1] = BufferedPacket(half1, now, senderTimestampMs)
+            buffer[subSeq2] = BufferedPacket(half2, now, senderTimestampMs + 20)
+        } else {
+            buffer[sequence] = BufferedPacket(pcm, now, senderTimestampMs)
+        }
+
         // 3. RFC 3550 Inter-arrival jitter update
         if (lastArrivalEpochMs != 0L && senderTimestampMs != 0L && lastSenderTimestampMs != 0L) {
             val transitDiff = (now - lastArrivalEpochMs) - (senderTimestampMs - lastSenderTimestampMs)

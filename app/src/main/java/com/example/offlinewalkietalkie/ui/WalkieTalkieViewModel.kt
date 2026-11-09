@@ -400,7 +400,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     Log.d(TAG, "VOICE frame from $peerId: encrypted=${decodedFrame.isEncrypted()} authTag=${decodedFrame.authTag != null} seq=${decodedFrame.sequence} payload=${decodedFrame.payload.size}B hasKey=${cryptoManager.hasSessionKey(peerId)}")
                     if (decodedFrame.isEncrypted() && decodedFrame.authTag != null) {
                         if (decodedFrame.sequence == 1 || decodedFrame.sequence % 50 == 0) {
-                            Log.i(TAG, "Received VOICE seq=${decodedFrame.sequence} payload=${decodedFrame.payload.size}B")
+                            Log.i(TAG, "Received VOICE seq=${decodedFrame.sequence} payload=${decodedFrame.payload.size}B codec=${decodedFrame.getCodecType()}")
                         }
                         val nonce = generateNonce(decodedFrame.sessionId, decodedFrame.sequence)
                         val dummyForAad = decodedFrame.copy(hopLimit = 0)
@@ -418,7 +418,8 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                             voiceEngine.handleIncomingFrame(
                                 peerId = peerId,
                                 sequence = decodedFrame.sequence,
-                                encodedOpus = plaintext,
+                                encodedAudio = plaintext,
+                                codecType = decodedFrame.getCodecType(),
                                 senderTimestampMs = decodedFrame.timestamp.toLong()
                             )
 
@@ -433,20 +434,8 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                             Log.w(TAG, "VOICE decrypt FAILED from $peerId seq=${decodedFrame.sequence} payloadSize=${decodedFrame.payload.size} authTagSize=${decodedFrame.authTag?.size}")
                         }
                     } else {
-                        // Plain voice frame: play directly!
-                        Log.d(TAG, "Received plain VOICE seq=${decodedFrame.sequence} payload=${decodedFrame.payload.size}B")
-                        voiceEngine.handleIncomingFrame(
-                            peerId = peerId,
-                            sequence = decodedFrame.sequence,
-                            encodedOpus = decodedFrame.payload,
-                            senderTimestampMs = decodedFrame.timestamp.toLong()
-                        )
-                        if (replayBuffer.isEnabled) {
-                            replayBuffer.onFrameReceived(decodedFrame.payload)
-                        }
-                        if (decodedFrame.hopLimit > 0 && _isRelayModeActive.value) {
-                            relayVoiceFrame(decodedFrame, decodedFrame.payload, ingressPeerId = peerId)
-                        }
+                        // P0-04 Remediation: Fail-closed security. Reject unauthenticated or unencrypted voice frames.
+                        Log.w(TAG, "Dropping unauthenticated or unencrypted VOICE frame from $peerId seq=${decodedFrame.sequence}")
                     }
                 }
                 FrameType.FLOOR_STATUS -> {
@@ -498,31 +487,53 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     shouldForwardControlFrame = true
                 }
                 FrameType.TEXT -> {
-                    val content = String(decodedFrame.payload, Charsets.UTF_8)
                     val peerName = _peers.value.find { it.id == peerId }?.name ?: "Peer"
-                    Log.i(TAG, "Received TEXT from $peerName seq=${decodedFrame.sequence}: \"${content.take(40)}\"")
-                    val msg = TextMessage(
-                        sequence = decodedFrame.sequence,
-                        senderMemberId = decodedFrame.sessionId,
-                        senderName = peerName,
-                        content = content,
-                        status = TextDeliveryStatus.DELIVERED
-                    )
-                    _textMessages.value = _textMessages.value + msg
-                    val ack = Frame(
-                        type = FrameType.ACK,
-                        sequence = decodedFrame.sequence,
-                        sessionId = decodedFrame.sessionId,
-                        timestamp = System.currentTimeMillis().toInt()
-                    )
-                    transport.send(peerId, ack.toBytes())
+                    val content: String? = if (decodedFrame.isEncrypted() && decodedFrame.authTag != null) {
+                        val nonce = generateNonce(decodedFrame.sessionId, decodedFrame.sequence)
+                        val dummyForAad = decodedFrame.copy(hopLimit = 0)
+                        val headerAad = dummyForAad.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
+                        val decrypted = cryptoManager.decrypt(peerId, decodedFrame.payload, decodedFrame.authTag, nonce, headerAad)
+                        decrypted?.let { String(it, Charsets.UTF_8) }
+                    } else null
+
+                    if (content != null) {
+                        Log.i(TAG, "Received authenticated encrypted TEXT from $peerName seq=${decodedFrame.sequence} (len=${content.length})")
+                        val msg = TextMessage(
+                            sequence = decodedFrame.sequence,
+                            senderMemberId = decodedFrame.sessionId,
+                            senderName = peerName,
+                            content = content,
+                            status = TextDeliveryStatus.DELIVERED
+                        )
+                        _textMessages.value = _textMessages.value + msg
+                        val ack = Frame(
+                            type = FrameType.ACK,
+                            sequence = decodedFrame.sequence,
+                            sessionId = decodedFrame.sessionId,
+                            timestamp = System.currentTimeMillis().toInt()
+                        )
+                        transport.send(peerId, ack.toBytes())
+                    } else {
+                        Log.w(TAG, "Dropping unauthenticated or unencrypted TEXT from $peerId seq=${decodedFrame.sequence}")
+                    }
                 }
                 FrameType.ACK -> {
                     reliableMessageManager.onAckReceived(sessionId, decodedFrame.sequence, peerId)
                 }
                 FrameType.KEY_UPDATE -> {
-                    if (decodedFrame.payload.isNotEmpty()) {
-                        cryptoManager.deriveSessionKey(peerId, decodedFrame.payload)
+                    // P0-05 Remediation: Decrypt distributed symmetric channel key via pairwise session key
+                    if (decodedFrame.isEncrypted() && decodedFrame.authTag != null) {
+                        val nonce = generateNonce(decodedFrame.sessionId, decodedFrame.sequence)
+                        val dummyForAad = decodedFrame.copy(hopLimit = 0)
+                        val headerAad = dummyForAad.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
+                        val channelKeyBytes = cryptoManager.decrypt(peerId, decodedFrame.payload, decodedFrame.authTag, nonce, headerAad)
+                        if (channelKeyBytes != null && channelKeyBytes.size >= 16) {
+                            cryptoManager.installChannelKey(decodedFrame.sessionId, channelKeyBytes)
+                            Log.i(TAG, "Successfully installed distributed channel voice key for channel=${decodedFrame.sessionId} (epoch=${decodedFrame.sequence})")
+                        }
+                    } else if (decodedFrame.payload.size == 32) {
+                        cryptoManager.installChannelKey(decodedFrame.sessionId, decodedFrame.payload)
+                        Log.i(TAG, "Installed pre-paired channel voice key for channel=${decodedFrame.sessionId}")
                     }
                 }
                 FrameType.GROUP_CONTROL -> {
@@ -562,13 +573,20 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     /**
-     * Gates voice on group verification, not raw transport connectivity. A link the
-     * group manager has accepted but not yet HMAC-verified reports isConnected=true at
-     * the transport layer well before it is trustworthy — without this check that window
-     * would carry live audio to (or from) a peer that turns out to be an impostor.
+     * Gates voice on authenticated session keys and group verification, not raw transport connectivity. (P0-03 Fix)
      */
-    private fun isVoiceTrusted(peerId: String): Boolean {
+    fun isVoiceTrusted(peerId: String): Boolean {
+        if (!cryptoManager.hasSessionKey(peerId)) return false
+        val host = _channelHostController.value
+        if (host != null) {
+            val member = host.membersFlow.value.find { it.endpointId == peerId }
+            return member != null
+        }
         return true
+    }
+
+    fun getPeerSasCode(peerId: String): String {
+        return cryptoManager.calculateNumericSas(peerId)
     }
 
     private suspend fun relayVoiceFrame(
@@ -640,42 +658,34 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             val activePeers = _peers.value.filter { it.isConnected }
             if (activePeers.isNotEmpty() && (sequence == 1 || sequence % 50 == 0)) {
-                Log.i(TAG, "Sending VOICE frame $sequence to ${activePeers.size} peer(s), payload=${encodedFrame.size}B")
+                Log.i(TAG, "Sending encrypted VOICE frame $sequence to ${activePeers.size} peer(s), payload=${encodedFrame.size}B")
             }
-            activePeers.forEach { peer ->
-                if (cryptoManager.hasSessionKey(peer.id)) {
-                    val nonce = generateNonce(sessionId, sequence)
-                    val dummyFrame = Frame(
-                        type = FrameType.VOICE,
-                        flags = Frame.FLAG_ENCRYPTED,
-                        hopLimit = 0,
-                        sessionId = sessionId,
-                        sequence = sequence,
-                        timestamp = System.currentTimeMillis().toInt(),
-                        payload = ByteArray(encodedFrame.size)
-                    )
-                    val headerAad = dummyFrame.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
+            val codecFlag: Byte = if (voiceEngine.isSurvivalCodecActive()) Frame.FLAG_CODEC_CODEC2 else Frame.FLAG_CODEC_AMR_NB
 
-                    val encrypted = cryptoManager.encrypt(peer.id, encodedFrame, nonce, headerAad)
-                    if (encrypted != null) {
-                        val frame = dummyFrame.copy(
-                            hopLimit = 3,
-                            payload = encrypted.first,
-                            authTag = encrypted.second
-                        )
-                        transport.send(peer.id, frame.toBytes())
-                    }
-                } else {
-                    // Send plain voice frame if session key not yet derived
-                    val frame = Frame(
-                        type = FrameType.VOICE,
-                        flags = 0,
+            activePeers.forEach { peer ->
+                if (!cryptoManager.hasSessionKey(peer.id)) {
+                    // P0-04 Remediation: Fail-closed security. Drop frame rather than transmitting plaintext audio.
+                    return@forEach
+                }
+
+                val nonce = generateNonce(sessionId, sequence)
+                val dummyFrame = Frame(
+                    type = FrameType.VOICE,
+                    flags = (Frame.FLAG_ENCRYPTED.toInt() or codecFlag.toInt()).toByte(),
+                    hopLimit = 0,
+                    sessionId = sessionId,
+                    sequence = sequence,
+                    timestamp = System.currentTimeMillis().toInt(),
+                    payload = ByteArray(encodedFrame.size)
+                )
+                val headerAad = dummyFrame.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
+
+                val encrypted = cryptoManager.encrypt(peer.id, encodedFrame, nonce, headerAad)
+                if (encrypted != null) {
+                    val frame = dummyFrame.copy(
                         hopLimit = 3,
-                        sessionId = sessionId,
-                        sequence = sequence,
-                        timestamp = System.currentTimeMillis().toInt(),
-                        payload = encodedFrame,
-                        authTag = null
+                        payload = encrypted.first,
+                        authTag = encrypted.second
                     )
                     transport.send(peer.id, frame.toBytes())
                 }
@@ -1140,14 +1150,29 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         hostCtrl.onKeyEpochRotated = { newEpoch, newKey, authorized ->
             viewModelScope.launch {
                 authorized.filter { it.role != MemberRole.HOST && it.endpointId != null }.forEach { member ->
-                    val frame = Frame(
+                    val ep = member.endpointId ?: return@forEach
+                    if (!cryptoManager.hasSessionKey(ep)) return@forEach
+
+                    // P0-05 Remediation: Encrypt distributed channel voice key with each member's pairwise session key
+                    val nonce = generateNonce(sessionId, newEpoch)
+                    val dummyFrame = Frame(
                         type = FrameType.KEY_UPDATE,
-                        payload = newKey,
+                        flags = Frame.FLAG_ENCRYPTED,
+                        hopLimit = 0,
                         sessionId = sessionId,
                         sequence = newEpoch,
-                        timestamp = System.currentTimeMillis().toInt()
+                        timestamp = System.currentTimeMillis().toInt(),
+                        payload = ByteArray(newKey.size)
                     )
-                    member.endpointId?.let { ep -> transport.send(ep, frame.toBytes()) }
+                    val headerAad = dummyFrame.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
+                    val encrypted = cryptoManager.encrypt(ep, newKey, nonce, headerAad) ?: return@forEach
+
+                    val frame = dummyFrame.copy(
+                        hopLimit = 3,
+                        payload = encrypted.first,
+                        authTag = encrypted.second
+                    )
+                    transport.send(ep, frame.toBytes())
                 }
             }
         }
@@ -1173,31 +1198,49 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     fun sendTextMessage(content: String) {
         val seq = controlSequence.getAndIncrement()
-        Log.i(TAG, "sendTextMessage \"${content.take(40)}\" to ${_peers.value.count { it.isConnected }} peer(s)")
+        val connectedPeers = _peers.value.filter { it.isConnected }
+        Log.i(TAG, "sendTextMessage (len=${content.length}) to ${connectedPeers.size} peer(s)")
         val textMsg = TextMessage(
             sequence = seq,
             senderMemberId = sessionId,
             senderName = Build.MODEL,
             content = content,
-            status = if (_peers.value.any { it.isConnected }) TextDeliveryStatus.SENDING else TextDeliveryStatus.FAILED
+            status = if (connectedPeers.isNotEmpty()) TextDeliveryStatus.SENDING else TextDeliveryStatus.FAILED
         )
         _textMessages.value = _textMessages.value + textMsg
 
         val payload = content.toByteArray(Charsets.UTF_8)
-        val frame = Frame(
-            type = FrameType.TEXT,
-            payload = payload,
-            sequence = seq,
-            sessionId = sessionId,
-            timestamp = System.currentTimeMillis().toInt()
-        )
-        val connectedPeers = _peers.value.filter { it.isConnected }
         if (connectedPeers.isEmpty()) return
-        connectedPeers.forEach {
+
+        // P0-04 Remediation: Encrypt text messages per-peer with AES-256-GCM session keys
+        connectedPeers.forEach { peer ->
+            if (!cryptoManager.hasSessionKey(peer.id)) {
+                Log.w(TAG, "Cannot send text: peer ${peer.id} has no active session key")
+                return@forEach
+            }
+            val nonce = generateNonce(sessionId, seq)
+            val dummyFrame = Frame(
+                type = FrameType.TEXT,
+                flags = Frame.FLAG_ENCRYPTED,
+                hopLimit = 0,
+                sessionId = sessionId,
+                sequence = seq,
+                timestamp = System.currentTimeMillis().toInt(),
+                payload = ByteArray(payload.size)
+            )
+            val headerAad = dummyFrame.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
+            val encrypted = cryptoManager.encrypt(peer.id, payload, nonce, headerAad) ?: return@forEach
+
+            val frame = dummyFrame.copy(
+                hopLimit = 3,
+                payload = encrypted.first,
+                authTag = encrypted.second
+            )
+
             reliableMessageManager.sendReliable(
                 memberId = sessionId,
                 sequence = seq,
-                endpointId = it.id,
+                endpointId = peer.id,
                 packetBytes = frame.toBytes(),
                 onDelivered = {
                     _textMessages.value = _textMessages.value.map { current ->

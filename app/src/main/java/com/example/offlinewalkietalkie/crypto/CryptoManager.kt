@@ -29,21 +29,55 @@ class CryptoManager {
         return keyPair.public.encoded
     }
 
-    fun deriveSessionKey(peerId: String, peerPublicKeyBytes: ByteArray) {
-        val keyFactory = KeyFactory.getInstance("EC")
-        val peerPublicKey = keyFactory.generatePublic(X509EncodedKeySpec(peerPublicKeyBytes))
-        
-        val keyAgreement = KeyAgreement.getInstance("ECDH")
-        keyAgreement.init(keyPair.private)
-        keyAgreement.doPhase(peerPublicKey, true)
-        
-        val sharedSecret = keyAgreement.generateSecret()
-        
-        val digest = MessageDigest.getInstance("SHA-256")
-        val keyBytes = digest.digest(sharedSecret)
-        
-        // AES keys are typically 16, 24, or 32 bytes. SHA-256 gives 32 bytes, perfect for AES-256.
-        sessionKeys[peerId] = SecretKeySpec(keyBytes, "AES")
+    fun deriveSessionKey(peerId: String, peerPublicKeyBytes: ByteArray): Boolean {
+        return try {
+            val keyFactory = KeyFactory.getInstance("EC")
+            val peerPublicKey = keyFactory.generatePublic(X509EncodedKeySpec(peerPublicKeyBytes))
+            
+            val keyAgreement = KeyAgreement.getInstance("ECDH")
+            keyAgreement.init(keyPair.private)
+            keyAgreement.doPhase(peerPublicKey, true)
+            
+            val sharedSecret = keyAgreement.generateSecret()
+            val digest = MessageDigest.getInstance("SHA-256")
+            val keyBytes = digest.digest(sharedSecret)
+            
+            sessionKeys[peerId] = SecretKeySpec(keyBytes, "AES")
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Installs a pre-shared or host-distributed symmetric channel voice key directly,
+     * avoiding incorrect parsing via X509EncodedKeySpec.
+     */
+    fun installChannelKey(channelId: Long, keyBytes: ByteArray) {
+        if (keyBytes.size >= 16) {
+            sessionKeys["channel:$channelId"] = SecretKeySpec(keyBytes, "AES")
+        }
+    }
+
+    fun hasChannelKey(channelId: Long): Boolean = sessionKeys.containsKey("channel:$channelId")
+
+    fun installDirectKey(keyId: String, keyBytes: ByteArray) {
+        if (keyBytes.size >= 16) {
+            sessionKeys[keyId] = SecretKeySpec(keyBytes, "AES")
+        }
+    }
+
+    /**
+     * Computes a 6-digit Short Authentication String (SAS) from the derived session key
+     * for visual verification between peers (similar to Signal / Apple AirDrop / Vivo pairing).
+     */
+    fun calculateNumericSas(peerId: String): String {
+        val key = sessionKeys[peerId]?.encoded ?: return "------"
+        val digest = MessageDigest.getInstance("SHA-256").digest(key)
+        val num = ((digest[0].toInt() and 0x7F) shl 16) or
+                  ((digest[1].toInt() and 0xFF) shl 8) or
+                  (digest[2].toInt() and 0xFF)
+        return String.format("%06d", num % 1_000_000)
     }
 
     fun encrypt(peerId: String, plaintext: ByteArray, nonce: ByteArray, aad: ByteArray? = null): Pair<ByteArray, ByteArray>? {

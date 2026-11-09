@@ -39,6 +39,22 @@ enum class FrameType(val value: Byte) {
     }
 }
 
+enum class AudioCodecType(val flagValue: Byte) {
+    AMR_NB(0x00),
+    CODEC2(0x02),
+    OPUS(0x04);
+
+    companion object {
+        fun fromFlags(flags: Byte): AudioCodecType {
+            return when (flags.toInt() and 0x06) {
+                CODEC2.flagValue.toInt() -> CODEC2
+                OPUS.flagValue.toInt() -> OPUS
+                else -> AMR_NB
+            }
+        }
+    }
+}
+
 data class Frame(
     val version: Byte = 1,
     val type: FrameType,
@@ -54,9 +70,15 @@ data class Frame(
         const val MAGIC: Short = 0x5754 // "WT"
         const val HEADER_SIZE = 2 + 1 + 1 + 1 + 1 + 8 + 4 + 4 + 2
         const val FLAG_ENCRYPTED: Byte = 0x01
+        const val FLAG_CODEC_MASK: Byte = 0x06
+        const val FLAG_CODEC_AMR_NB: Byte = 0x00
+        const val FLAG_CODEC_CODEC2: Byte = 0x02
+        const val FLAG_CODEC_OPUS: Byte = 0x04
     }
 
     fun isEncrypted(): Boolean = (flags.toInt() and FLAG_ENCRYPTED.toInt()) != 0
+
+    fun getCodecType(): AudioCodecType = AudioCodecType.fromFlags(flags)
 
     fun toBytes(): ByteArray {
         val totalSize = HEADER_SIZE + payload.size + (authTag?.size ?: 0)

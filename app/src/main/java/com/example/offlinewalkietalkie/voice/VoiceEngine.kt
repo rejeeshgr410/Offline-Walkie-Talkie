@@ -2,6 +2,7 @@ package com.example.offlinewalkietalkie.voice
 
 import android.content.Context
 import android.util.Log
+import com.example.offlinewalkietalkie.protocol.AudioCodecType
 import kotlinx.coroutines.*
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -51,24 +52,44 @@ class VoiceEngine(
         capture.start { }
         captureJob = coroutineScope.launch {
             var frameCount = 0
+            var pendingCodec2Pcm: ShortArray? = null
             capture.captureLoop { pcmFrame ->
                 try {
                     onRawPcmCaptured?.invoke(pcmFrame)
-                    val encoded = codec.encode(bytesToShorts(pcmFrame))
+                    val shorts = bytesToShorts(pcmFrame)
+
+                    // P1-01 Fix: Codec 2 mode 1600 needs 320 samples (40ms). Accumulate two 20ms (160 sample)
+                    // captures before encoding to eliminate half-frame silence padding.
+                    val pcmToEncode = if (codec is Codec2AudioCodec) {
+                        if (pendingCodec2Pcm == null) {
+                            pendingCodec2Pcm = shorts
+                            return@captureLoop
+                        }
+                        val combined = ShortArray(pendingCodec2Pcm!!.size + shorts.size)
+                        System.arraycopy(pendingCodec2Pcm!!, 0, combined, 0, pendingCodec2Pcm!!.size)
+                        System.arraycopy(shorts, 0, combined, pendingCodec2Pcm!!.size, shorts.size)
+                        pendingCodec2Pcm = null
+                        combined
+                    } else {
+                        shorts
+                    }
+
+                    val encoded = codec.encode(pcmToEncode)
                     if (encoded.isNotEmpty()) {
                         sequenceNumber++
                         frameCount++
                         if (frameCount == 1 || frameCount % 50 == 0) {
-                            Log.i(TAG, "captured+encoded frame $frameCount (${encoded.size} bytes)")
+                            Log.i(TAG, "captured+encoded frame $frameCount (${encoded.size} bytes, codec=${codec::class.simpleName})")
                         }
                         if (isLoopback) {
-                            handleIncomingFrame("local", sequenceNumber, encoded, System.currentTimeMillis())
+                            val codecType = if (codec is Codec2AudioCodec) AudioCodecType.CODEC2 else AudioCodecType.AMR_NB
+                            handleIncomingFrame("local", sequenceNumber, encoded, codecType, System.currentTimeMillis())
                         } else {
                             onEncodedFrame(sequenceNumber, encoded)
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Opus encode failed: ${e.message}")
+                    Log.w(TAG, "Audio encode failed: ${e.message}")
                 }
             }
             Log.i(TAG, "capture loop ended (frames=$frameCount)")
@@ -139,15 +160,20 @@ class VoiceEngine(
     fun handleIncomingFrame(
         peerId: String,
         sequence: Int,
-        encodedOpus: ByteArray,
+        encodedAudio: ByteArray,
+        codecType: AudioCodecType = AudioCodecType.AMR_NB,
         senderTimestampMs: Long = 0L
     ) {
         startPlayback()
         val jb = jitterBuffers.getOrPut(peerId) { 
-            val decoder = if (encodedOpus.size <= 8) Codec2AudioCodec() else AmrNbCodec()
+            val decoder: AudioCodec = when (codecType) {
+                AudioCodecType.CODEC2 -> Codec2AudioCodec()
+                AudioCodecType.OPUS -> OpusCodec()
+                else -> AmrNbCodec()
+            }
             JitterBuffer(decoder) 
         }
-        jb.push(sequence, encodedOpus, senderTimestampMs)
+        jb.push(sequence, encodedAudio, senderTimestampMs)
     }
 
     fun getJitterBuffer(peerId: String): JitterBuffer? = jitterBuffers[peerId]

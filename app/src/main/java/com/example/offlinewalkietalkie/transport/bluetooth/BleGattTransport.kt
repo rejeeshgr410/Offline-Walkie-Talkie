@@ -33,9 +33,9 @@ class BleGattTransport(private val context: Context) : Transport {
     companion object {
         private const val TAG = "TL/BleGattTransport"
 
-        // Vivo Walkie-Talkie Service and Voice/Data Characteristic UUIDs
-        val SERVICE_UUID: UUID = UUID.fromString("66840001-8673-8679-8390-6768696E9746")
-        val CHARACTERISTIC_UUID: UUID = UUID.fromString("66841001-8673-8679-8390-6768696E9746")
+        // TalkLoop Dedicated Application Service & Characteristic UUIDs (Application-Owned Protocol)
+        val SERVICE_UUID: UUID = UUID.fromString("1A800001-B4B5-4C3D-8F9E-7A6B5C4D3E2F")
+        val CHARACTERISTIC_UUID: UUID = UUID.fromString("1A801001-B4B5-4C3D-8F9E-7A6B5C4D3E2F")
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         private const val PACKET_TYPE_SINGLE: Byte = 0x00
@@ -115,6 +115,15 @@ class BleGattTransport(private val context: Context) : Transport {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 serverConnectedDevices[address] = device
                 addOrUpdatePeer(address, name, isConnected = true)
+
+                // Emit connection request for approval and authentication state machine (§19.3 & P0-03)
+                _connectionRequests.tryEmit(
+                    ConnectionRequest(
+                        peerId = address,
+                        peerName = name,
+                        authCode = address.replace(":", "").takeLast(4)
+                    )
+                )
 
                 // Symmetrical Connection: Connect client back if we haven't already
                 if (!clientGatts.containsKey(address) && !connectingAddresses.contains(address)) {
@@ -218,6 +227,16 @@ class BleGattTransport(private val context: Context) : Transport {
                     peerCharacteristics[address] = characteristic
                     Log.i(TAG, "Discovered Walkie-Talkie GATT Characteristic for $address")
 
+                    // Emit connection request for approval and mutual authentication
+                    val peerName = _peers.value[address]?.name ?: "Peer ${address.takeLast(5)}"
+                    _connectionRequests.tryEmit(
+                        ConnectionRequest(
+                            peerId = address,
+                            peerName = peerName,
+                            authCode = address.replace(":", "").takeLast(4)
+                        )
+                    )
+
                     // Enable notifications on this characteristic
                     gatt.setCharacteristicNotification(characteristic, true)
                     val descriptor = characteristic.getDescriptor(CCCD_UUID)
@@ -296,6 +315,36 @@ class BleGattTransport(private val context: Context) : Transport {
 
         override fun onStartFailure(errorCode: Int) {
             Log.w(TAG, "BLE GATT Advertising failed with code $errorCode")
+            if (errorCode == AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE) {
+                Log.i(TAG, "Retrying advertising without scan response...")
+                val settings = AdvertiseSettings.Builder()
+                    .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                    .setConnectable(true)
+                    .setTimeout(0)
+                    .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+                    .build()
+                val data = AdvertiseData.Builder()
+                    .setIncludeDeviceName(false)
+                    .setIncludeTxPowerLevel(false)
+                    .addServiceUuid(ParcelUuid(SERVICE_UUID))
+                    .build()
+                try {
+                    leAdvertiser?.startAdvertising(settings, data, object : AdvertiseCallback() {
+                        override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+                            Log.i(TAG, "BLE GATT Advertising active (minimal payload fallback)")
+                            _isAdvertising.value = true
+                            _state.value = TransportState.ACTIVE
+                        }
+                        override fun onStartFailure(err: Int) {
+                            Log.e(TAG, "BLE fallback advertising failed: $err")
+                            _isAdvertising.value = false
+                        }
+                    })
+                    return
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Fallback advertising error", e)
+                }
+            }
             _isAdvertising.value = false
         }
     }
@@ -306,16 +355,16 @@ class BleGattTransport(private val context: Context) : Transport {
             val address = device.address
             val recordName = result.scanRecord?.deviceName
             val rawName = device.name?.takeIf { it.isNotBlank() } ?: recordName?.takeIf { it.isNotBlank() }
-            val name = rawName ?: _peers.value[address]?.name ?: "Walkie-Talkie ${address.takeLast(5)}"
+            val name = rawName ?: _peers.value[address]?.name ?: "TalkLoop ${address.takeLast(5)}"
 
             val isConn = clientGatts.containsKey(address) || serverConnectedDevices.containsKey(address)
             addOrUpdatePeer(address, name, isConnected = isConn)
 
-            // Auto-connect to discovered Walkie-Talkie device
+            // Auto-connect to discovered TalkLoop device during active symmetric discovery
             if (!isConn && !connectingAddresses.contains(address)) {
                 connectingAddresses.add(address)
                 coroutineScope.launch {
-                    Log.i(TAG, "Auto-connecting GATT to discovered peer $name ($address)")
+                    Log.i(TAG, "Connecting GATT to discovered TalkLoop peer $name ($address)")
                     connect(address)
                     delay(4000)
                     connectingAddresses.remove(address)
@@ -332,7 +381,7 @@ class BleGattTransport(private val context: Context) : Transport {
     private fun addOrUpdatePeer(address: String, name: String, isConnected: Boolean) {
         val current = _peers.value.toMutableMap()
         val existing = current[address]
-        val cleanName = if (name.startsWith("Walkie-Talkie") && existing != null && !existing.name.startsWith("Walkie-Talkie")) {
+        val cleanName = if ((name.startsWith("TalkLoop") || name.startsWith("Walkie-Talkie")) && existing != null && !existing.name.startsWith("TalkLoop") && !existing.name.startsWith("Walkie-Talkie")) {
             existing.name
         } else {
             name
@@ -353,17 +402,37 @@ class BleGattTransport(private val context: Context) : Transport {
             PACKET_TYPE_CHUNK -> {
                 // Fragmented chunk: [0x01, packetSeq: Byte, chunkIndex: Byte, totalChunks: Byte, payload...]
                 if (data.size < 4) return
-                val packetSeq = data[1].toInt()
-                val chunkIndex = data[2].toInt()
-                val totalChunks = data[3].toInt()
+                val packetSeq = data[1].toInt() and 0xFF
+                val chunkIndex = data[2].toInt() and 0xFF
+                val totalChunks = data[3].toInt() and 0xFF
+
+                if (totalChunks <= 0 || totalChunks > 64 || chunkIndex >= totalChunks) {
+                    Log.w(TAG, "Malformed chunk header: idx=$chunkIndex total=$totalChunks seq=$packetSeq")
+                    return
+                }
                 val chunkPayload = data.copyOfRange(4, data.size)
 
                 val key = "$address:$packetSeq"
+                if (incomingChunkBuffers.size > 32) {
+                    val cutoff = System.currentTimeMillis() - 3000
+                    incomingChunkBuffers.entries.removeIf { it.value.timestamp < cutoff }
+                }
+
                 val buffer = incomingChunkBuffers.computeIfAbsent(key) { ChunkBuffer(totalChunks) }
                 buffer.chunks[chunkIndex] = chunkPayload
 
                 if (buffer.chunks.size == buffer.totalChunks) {
-                    val out = ByteArrayOutputStream()
+                    var totalSize = 0
+                    for (i in 0 until buffer.totalChunks) {
+                        totalSize += buffer.chunks[i]?.size ?: 0
+                    }
+                    if (totalSize > 65536) {
+                        Log.w(TAG, "Reassembled frame exceeds size limit ($totalSize bytes)")
+                        incomingChunkBuffers.remove(key)
+                        return
+                    }
+
+                    val out = ByteArrayOutputStream(totalSize)
                     for (i in 0 until buffer.totalChunks) {
                         buffer.chunks[i]?.let { out.write(it) }
                     }
@@ -404,16 +473,30 @@ class BleGattTransport(private val context: Context) : Transport {
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
+        // P0-02 FIX: Primary legacy advertisement MUST NOT include device name,
+        // which easily exceeds 31 bytes on phones with long Bluetooth names.
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(true)
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
+            .build()
+
+        // Scan response carries device name only (up to 29 bytes for name) without
+        // adding 128-bit service data that would blow past the 31-byte limit.
+        val scanResponse = AdvertiseData.Builder()
+            .setIncludeDeviceName(true)
             .build()
 
         try {
             leAdvertiser?.stopAdvertising(advertiseCallback)
-            leAdvertiser?.startAdvertising(settings, data, advertiseCallback)
+            leAdvertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to startAdvertising", e)
+            Log.e(TAG, "Failed to startAdvertising with scan response, trying data only", e)
+            try {
+                leAdvertiser?.startAdvertising(settings, data, advertiseCallback)
+            } catch (e2: Throwable) {
+                Log.e(TAG, "Failed to startAdvertising fallback", e2)
+            }
         }
     }
 
@@ -543,25 +626,32 @@ class BleGattTransport(private val context: Context) : Transport {
             }
             writeRawPacket(peerId, packet)
         } else {
-            // Fragmented chunks
-            val packetSeq = (outgoingPacketSeq.getAndIncrement() and 0x7F).toByte()
-            val totalChunks = ((bytes.size + maxChunk - 1) / maxChunk).toByte()
+            // Fragmented chunks with safe unsigned sequence and pacing (P0-06)
+            val packetSeq = (outgoingPacketSeq.getAndIncrement() and 0xFF).toByte()
+            val totalChunks = ((bytes.size + maxChunk - 1) / maxChunk)
+            if (totalChunks > 64) {
+                Log.w(TAG, "Frame too large for chunking: ${bytes.size}B -> $totalChunks chunks")
+                return
+            }
 
             var offset = 0
-            var chunkIndex = 0.toByte()
+            var chunkIndex = 0
 
             while (offset < bytes.size) {
                 val chunkSize = (bytes.size - offset).coerceAtMost(maxChunk)
                 val chunk = ByteArray(4 + chunkSize).apply {
                     this[0] = PACKET_TYPE_CHUNK
                     this[1] = packetSeq
-                    this[2] = chunkIndex
-                    this[3] = totalChunks
+                    this[2] = (chunkIndex and 0xFF).toByte()
+                    this[3] = (totalChunks and 0xFF).toByte()
                     System.arraycopy(bytes, offset, this, 4, chunkSize)
                 }
                 writeRawPacket(peerId, chunk)
                 offset += chunkSize
                 chunkIndex++
+                if (offset < bytes.size) {
+                    delay(5) // Metered 5ms pacing between successive chunks prevents BLE controller buffer overflow
+                }
             }
         }
     }
