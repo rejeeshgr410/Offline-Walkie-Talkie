@@ -6,6 +6,8 @@ import android.bluetooth.le.*
 import android.content.Context
 import android.os.Build
 import android.os.ParcelUuid
+import android.util.Log
+import com.example.offlinewalkietalkie.transport.LengthPrefixedFrameIO
 import androidx.annotation.RequiresApi
 import com.example.offlinewalkietalkie.transport.*
 import kotlinx.coroutines.*
@@ -32,6 +34,7 @@ import java.util.concurrent.ConcurrentHashMap
 class BleL2capTransport(private val context: Context) : Transport {
 
     companion object {
+        private const val TAG = "TL/BleL2cap"
         val SERVICE_UUID: UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
     }
 
@@ -66,18 +69,40 @@ class BleL2capTransport(private val context: Context) : Transport {
 
     private var leAdvertiser: BluetoothLeAdvertiser? = null
     private var leScanner: BluetoothLeScanner? = null
+    private var advertisingStarted = false
+    private var scanningStarted = false
+    private val _lastError = MutableStateFlow<String?>(null)
+    override val lastError: StateFlow<String?> = _lastError.asStateFlow()
+    private val _isAdvertising = MutableStateFlow(false)
+    override val isAdvertising: StateFlow<Boolean> = _isAdvertising.asStateFlow()
+    private val _isDiscovering = MutableStateFlow(false)
+    override val isDiscovering: StateFlow<Boolean> = _isDiscovering.asStateFlow()
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             _state.value = TransportState.ACTIVE
+            _isAdvertising.value = true
+            _lastError.value = null
         }
 
         override fun onStartFailure(errorCode: Int) {
+            advertisingStarted = false
+            _isAdvertising.value = false
+            _lastError.value = "BLE advertising failed: $errorCode"
+            Log.e(TAG, _lastError.value ?: "BLE advertising failed")
             _state.value = TransportState.ERROR
         }
     }
 
     private val scanCallback = object : ScanCallback() {
+        override fun onScanFailed(errorCode: Int) {
+            scanningStarted = false
+            _isDiscovering.value = false
+            _lastError.value = "BLE scan failed: $errorCode"
+            Log.e(TAG, _lastError.value ?: "BLE scan failed")
+            _state.value = TransportState.ERROR
+        }
+
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             result?.device?.let { device ->
                 val address = device.address
@@ -88,17 +113,19 @@ class BleL2capTransport(private val context: Context) : Transport {
                 } else {
                     0
                 }
-                if (psm != 0) {
+                if (psm in 1..65535) {
                     discoveredPsms[address] = psm
+                    addOrUpdatePeer(address, name, activeConnections.containsKey(address))
                 }
-                addOrUpdatePeer(address, name, activeConnections.containsKey(address))
             }
         }
     }
 
     override suspend fun startAdvertising(identity: LocalIdentity) {
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return
+        if (advertisingStarted) return
         startServer()
+        if (localPsm == 0) return
 
         leAdvertiser = bluetoothAdapter.bluetoothLeAdvertiser ?: return
         val settings = AdvertiseSettings.Builder()
@@ -109,28 +136,43 @@ class BleL2capTransport(private val context: Context) : Transport {
 
         val psmData = ByteBuffer.allocate(4).putInt(localPsm).array()
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(true)
-            .addServiceUuid(ParcelUuid(SERVICE_UUID))
+            .setIncludeDeviceName(false)
             .addServiceData(ParcelUuid(SERVICE_UUID), psmData)
             .build()
 
-        leAdvertiser?.startAdvertising(settings, data, advertiseCallback)
+        try {
+            leAdvertiser?.startAdvertising(settings, data, advertiseCallback)
+            advertisingStarted = true
+        } catch (e: Exception) {
+            _lastError.value = "BLE advertising failed: ${e.message}"
+            _state.value = TransportState.ERROR
+            Log.e(TAG, "BLE advertising failed", e)
+        }
     }
 
     override suspend fun startDiscovery(identity: LocalIdentity) {
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return
+        if (scanningStarted) return
         _state.value = TransportState.ACTIVE
 
         leScanner = bluetoothAdapter.bluetoothLeScanner ?: return
         val filter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(SERVICE_UUID))
+            .setServiceData(ParcelUuid(SERVICE_UUID), null)
             .build()
 
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
-        leScanner?.startScan(listOf(filter), settings, scanCallback)
+        try {
+            leScanner?.startScan(listOf(filter), settings, scanCallback)
+            scanningStarted = true
+            _isDiscovering.value = true
+        } catch (e: Exception) {
+            _lastError.value = "BLE scan failed: ${e.message}"
+            _state.value = TransportState.ERROR
+            Log.e(TAG, "BLE scan failed", e)
+        }
     }
 
     override suspend fun connect(peerId: String) {
@@ -168,6 +210,12 @@ class BleL2capTransport(private val context: Context) : Transport {
 
     override fun incomingFrames(): Flow<IncomingFrame> = _incomingFrames.asSharedFlow()
 
+    override suspend fun stopAdvertising() {
+        try { leAdvertiser?.stopAdvertising(advertiseCallback) } catch (e: Exception) { Log.w(TAG, "stopAdvertising failed", e) }
+        advertisingStarted = false
+        _isAdvertising.value = false
+    }
+
     override suspend fun stop() {
         try {
             leAdvertiser?.stopAdvertising(advertiseCallback)
@@ -176,6 +224,12 @@ class BleL2capTransport(private val context: Context) : Transport {
             leScanner?.stopScan(scanCallback)
         } catch (e: Exception) {}
 
+        advertisingStarted = false
+        scanningStarted = false
+        _isAdvertising.value = false
+        _isDiscovering.value = false
+        localPsm = 0
+        discoveredPsms.clear()
         serverSocket?.close()
         serverSocket = null
         activeConnections.values.forEach { it.cancel() }
@@ -229,23 +283,8 @@ class BleL2capTransport(private val context: Context) : Transport {
         override fun run() {
             while (true) {
                 try {
-                    val lengthBytes = ByteArray(4)
-                    var readLen = inStream.read(lengthBytes)
-                    if (readLen == -1) break
-
-                    val length = ByteBuffer.wrap(lengthBytes).int
-                    if (length > 0 && length < 65536) {
-                        val payload = ByteArray(length)
-                        var total = 0
-                        while (total < length) {
-                            val r = inStream.read(payload, total, length - total)
-                            if (r == -1) break
-                            total += r
-                        }
-                        if (total == length) {
-                            _incomingFrames.tryEmit(IncomingFrame(peerId, payload))
-                        }
-                    }
+                    val payload = LengthPrefixedFrameIO.read(inStream) ?: break
+                    _incomingFrames.tryEmit(IncomingFrame(peerId, payload))
                 } catch (e: IOException) {
                     break
                 }
@@ -254,13 +293,14 @@ class BleL2capTransport(private val context: Context) : Transport {
             removePeer(peerId)
         }
 
+        @Synchronized
         fun write(bytes: ByteArray) {
             try {
-                val lengthBytes = ByteBuffer.allocate(4).putInt(bytes.size).array()
-                outStream.write(lengthBytes)
-                outStream.write(bytes)
-                outStream.flush()
-            } catch (e: IOException) {}
+                LengthPrefixedFrameIO.write(outStream, bytes)
+            } catch (e: IOException) {
+                Log.w(TAG, "L2CAP write failed", e)
+                cancel()
+            }
         }
 
         fun cancel() {

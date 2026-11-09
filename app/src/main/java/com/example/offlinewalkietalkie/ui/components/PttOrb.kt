@@ -49,6 +49,8 @@ fun PttOrb(
     val isRequesting = floorState is FloorState.Requesting
     val isHeldByOther = floorState is FloorState.HeldByOther
     val heldByOther by rememberUpdatedState(isHeldByOther)
+    val pressStart by rememberUpdatedState(onPressStart)
+    val pressEnd by rememberUpdatedState(onPressEnd)
 
     // Tactile 0.96 press bounce as mandated by better-ui
     val pressScale by animateFloatAsState(
@@ -140,10 +142,13 @@ fun PttOrb(
                         onPress = {
                             if (!heldByOther) {
                                 isPressed = true
-                                onPressStart()
-                                tryAwaitRelease()
-                                isPressed = false
-                                onPressEnd()
+                                try {
+                                    pressStart()
+                                    tryAwaitRelease()
+                                } finally {
+                                    isPressed = false
+                                    pressEnd()
+                                }
                             }
                         }
                     )
