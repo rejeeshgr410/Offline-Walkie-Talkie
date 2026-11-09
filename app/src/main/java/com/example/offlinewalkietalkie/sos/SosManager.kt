@@ -47,6 +47,7 @@ class SosManager(
     val acknowledgedResponders = _acknowledgedResponders.asStateFlow()
 
     var onSendAck: (suspend (SosAck, ingressPeerId: String?) -> Unit)? = null
+    var onBroadcastCancel: (suspend (String) -> Unit)? = null
 
     private var broadcastJob: Job? = null
 
@@ -95,6 +96,19 @@ class SosManager(
         broadcastJob = null
         _mySosBeacon.value = null
         _acknowledgedResponders.value = emptyList()
+        scope.launch {
+            try {
+                onBroadcastCancel?.invoke(localSenderId)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to broadcast SOS_CANCEL: ${e.message}")
+            }
+        }
+    }
+
+    fun handleIncomingSosCancel(senderId: String) {
+        Log.i(TAG, "Distress sender $senderId cancelled emergency SOS - dismissing alert and silencing alarm")
+        dismissAlert(senderId)
+        silenceAlarm()
     }
 
     suspend fun handleIncomingSos(beacon: SosBeacon, ingressPeerId: String?) {

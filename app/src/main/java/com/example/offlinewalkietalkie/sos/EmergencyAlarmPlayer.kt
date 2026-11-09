@@ -20,6 +20,7 @@ class EmergencyAlarmPlayer {
     companion object {
         private const val TAG = "TL/EmergencyAlarm"
         private const val SAMPLE_RATE = 16000
+        private const val MAX_ALARM_DURATION_MS = 30_000L // 30s safety auto-timeout
     }
 
     private var audioTrack: AudioTrack? = null
@@ -61,14 +62,20 @@ class EmergencyAlarmPlayer {
             audioTrack?.play()
 
             alarmJob = scope.launch {
+                val startTime = System.currentTimeMillis()
                 // Generate 300ms chunks: 850Hz tone then 1100Hz tone
                 val tone1 = generateTonePcm(850.0, 0.3)
                 val tone2 = generateTonePcm(1100.0, 0.3)
 
                 while (isActive && isPlaying) {
+                    if (System.currentTimeMillis() - startTime >= MAX_ALARM_DURATION_MS) {
+                        Log.i(TAG, "Emergency siren reached 30s safety timeout, auto-stopping audio")
+                        break
+                    }
                     audioTrack?.write(tone1, 0, tone1.size)
                     audioTrack?.write(tone2, 0, tone2.size)
                 }
+                stopAlarm()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start emergency alarm", e)

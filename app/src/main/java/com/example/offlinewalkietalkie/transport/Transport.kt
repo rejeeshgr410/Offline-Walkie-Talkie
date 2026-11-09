@@ -6,7 +6,14 @@ import kotlinx.coroutines.flow.StateFlow
 
 data class LocalIdentity(val endpointName: String)
 
-data class Peer(val id: String, val name: String, val isConnected: Boolean, val isAuthenticated: Boolean = false)
+data class Peer(
+    val id: String,
+    val name: String,
+    val isConnected: Boolean,
+    val isAuthenticated: Boolean = false,
+    val isDirect: Boolean = true,
+    val hopCount: Int = 0
+)
 
 data class IncomingFrame(val peerId: String, val bytes: ByteArray)
 

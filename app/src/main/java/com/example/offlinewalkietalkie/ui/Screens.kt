@@ -1525,7 +1525,7 @@ fun NearbyDevicesScreen(
                                         style = AppleHeadline
                                     )
                                     val statusText = when {
-                                        peer.isConnected && peer.isAuthenticated -> "Connected • Link Active"
+                                        peer.isConnected && peer.isAuthenticated -> if (peer.isDirect) "Connected • Direct Radio • Encrypted" else "Connected • Mesh Relay (${peer.hopCount} Hops)"
                                         peer.isConnected && !peer.isAuthenticated -> "Authenticating • Securing Link…"
                                         else -> "Nearby • Tap Connect"
                                     }

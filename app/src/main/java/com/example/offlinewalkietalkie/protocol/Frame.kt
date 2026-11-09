@@ -33,7 +33,8 @@ enum class FrameType(val value: Byte) {
     SOS(26),
     LOCATION_RADAR(27),
     TELEMETRY(28),
-    SOS_ACK(29);
+    SOS_ACK(29),
+    SOS_CANCEL(30);
 
     companion object {
         fun fromValue(value: Byte): FrameType? = values().find { it.value == value }

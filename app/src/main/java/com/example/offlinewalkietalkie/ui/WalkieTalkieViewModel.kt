@@ -305,6 +305,9 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         sosManager.onSendAck = { ack, ingressPeerId ->
             broadcastSosAckFrame(ack, ingressPeerId)
         }
+        sosManager.onBroadcastCancel = { senderId ->
+            broadcastSosCancelFrame(senderId)
+        }
 
         // Vivo OEM style: Auto-start BLE Long-Range discovery & advertising
         startNearby()
@@ -591,6 +594,12 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     val ack = SosAck.decode(decodedFrame.payload)
                     if (ack != null) {
                         sosManager.handleIncomingSosAck(ack)
+                    }
+                }
+                FrameType.SOS_CANCEL -> {
+                    val senderId = String(decodedFrame.payload, Charsets.UTF_8)
+                    if (senderId.isNotBlank()) {
+                        sosManager.handleIncomingSosCancel(senderId)
                     }
                 }
                 FrameType.LOCATION_RADAR -> {
@@ -1423,6 +1432,23 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         )
         val bytes = frame.toBytes()
         _peers.value.filter { it.isConnected && it.id != ingressPeerId }.forEach {
+            transport.send(it.id, bytes)
+        }
+    }
+
+    private suspend fun broadcastSosCancelFrame(senderId: String) {
+        val payload = senderId.toByteArray(Charsets.UTF_8)
+        val frame = Frame(
+            type = FrameType.SOS_CANCEL,
+            flags = 0,
+            hopLimit = 3,
+            sessionId = sessionId,
+            sequence = controlSequence.incrementAndGet(),
+            timestamp = (System.currentTimeMillis() and 0xFFFFFFFFL).toInt(),
+            payload = payload
+        )
+        val bytes = frame.toBytes()
+        _peers.value.filter { it.isConnected }.forEach {
             transport.send(it.id, bytes)
         }
     }

@@ -18,6 +18,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -44,6 +46,7 @@ fun PttOrb(
     modifier: Modifier = Modifier
 ) {
     var isPressed by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
 
     val isTalking = floorState is FloorState.HeldByMe || floorState is FloorState.Talking || floorState is FloorState.Granted
     val isRequesting = floorState is FloorState.Requesting
@@ -139,10 +142,12 @@ fun PttOrb(
                     detectTapGestures(
                         onPress = {
                             if (!heldByOther) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 isPressed = true
                                 onPressStart()
                                 tryAwaitRelease()
                                 isPressed = false
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 onPressEnd()
                             }
                         }

@@ -14,6 +14,7 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -103,6 +104,10 @@ class FloatingPttService : Service() {
     @SuppressLint("ClickableViewAccessibility")
     private fun setupFloatingView() {
         if (floatingView != null || windowManager == null) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "Cannot setup floating view: overlay permission not granted")
+            return
+        }
 
         val windowLayoutParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -218,9 +223,13 @@ class FloatingPttService : Service() {
             }
         }
 
-        floatingView = rootLayout
-        windowManager?.addView(rootLayout, windowLayoutParams)
-        Log.i(TAG, "Floating PTT overlay view added")
+        try {
+            floatingView = rootLayout
+            windowManager?.addView(rootLayout, windowLayoutParams)
+            Log.i(TAG, "Floating PTT overlay view added")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to add floating PTT overlay view", e)
+        }
     }
 
     private fun updateOrbVisualState(state: String, text: String) {
