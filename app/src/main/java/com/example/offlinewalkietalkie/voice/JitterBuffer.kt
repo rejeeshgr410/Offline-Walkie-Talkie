@@ -23,7 +23,7 @@ data class JitterBufferMetrics(
 )
 
 class JitterBuffer(
-    private val codec: AudioCodec,
+    val codec: AudioCodec,
     val targetDelayFrames: Int = TARGET_DELAY_FRAMES,
     val maxDelayFrames: Int = MAX_DELAY_FRAMES
 ) {
@@ -109,15 +109,20 @@ class JitterBuffer(
 
         // 3. RFC 3550 Inter-arrival jitter update
         if (lastArrivalEpochMs != 0L && senderTimestampMs != 0L && lastSenderTimestampMs != 0L) {
-            val transitDiff = (now - lastArrivalEpochMs) - (senderTimestampMs - lastSenderTimestampMs)
-            val d = Math.abs(transitDiff).toDouble()
-            estimatedJitterMs += (d - estimatedJitterMs) / 16.0
+            val transitSenderDiff = if (senderTimestampMs >= lastSenderTimestampMs) {
+                senderTimestampMs - lastSenderTimestampMs
+            } else {
+                (senderTimestampMs + 0x100000000L) - lastSenderTimestampMs
+            }
+            if (transitSenderDiff < 5000L) {
+                val transitDiff = (now - lastArrivalEpochMs) - transitSenderDiff
+                val d = Math.abs(transitDiff).toDouble()
+                estimatedJitterMs += (d - estimatedJitterMs) / 16.0
+            }
         }
         lastArrivalEpochMs = now
         lastSenderTimestampMs = senderTimestampMs
         totalPacketsReceived++
-
-        buffer[sequence] = BufferedPacket(pcm, now, senderTimestampMs)
 
         // Drop oldest packets if exceeding maximum playout deadline (200 ms)
         while (buffer.size > maxDelayFrames) {
@@ -170,8 +175,11 @@ class JitterBuffer(
 
         val packet = buffer.remove(nextSeq)
         if (packet != null) {
-            // Check stale cutoff on receiver clock (§19.14)
-            if (now - packet.arrivalEpochMs > STALE_VOICE_CUTOFF_MS) {
+            // Adaptive drop budget: target playout + 2x jitter, bounded between 60ms and STALE_VOICE_CUTOFF_MS (200ms)
+            val adaptiveDropBudgetMs = (TARGET_DELAY_FRAMES * FRAME_DURATION_MS + (estimatedJitterMs * 2.0).toLong())
+                .coerceIn(60L, STALE_VOICE_CUTOFF_MS)
+
+            if (now - packet.arrivalEpochMs > adaptiveDropBudgetMs) {
                 totalLatePacketsDropped++
                 lastPlayedSequence = nextSeq
                 plcConsecutiveFrames = 0

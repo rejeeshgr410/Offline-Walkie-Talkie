@@ -288,7 +288,7 @@ fun HomeScreen(
 
     val securedPeerCount by viewModel.securedPeerCount.collectAsState()
     val transportType by viewModel.transportType.collectAsState()
-    val connectedPeers = peers.filter { it.isConnected }
+    val connectedPeers = peers.filter { it.isConnected && it.isAuthenticated }
 
     var showSosModal by remember { mutableStateOf(false) }
     val incomingAlerts by viewModel.incomingAlerts.collectAsState()
@@ -348,6 +348,73 @@ fun HomeScreen(
                     onDismissAlert = { id -> viewModel.dismissSosAlert(id) },
                     onNavigateToRadar = onNavigateToRadar
                 )
+
+                // Pending Pairing Request Banner (Apple Security Modal in Dashboard)
+                val pendingRequest by viewModel.pendingRequest.collectAsState()
+                if (pendingRequest != null) {
+                    val req = pendingRequest!!
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = AppleCardSurface),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .border(1.dp, AppleSystemBlue.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Incoming Connection Request",
+                                        style = AppleCaption1,
+                                        color = AppleSystemBlue
+                                    )
+                                    Text(
+                                        text = req.peerName,
+                                        style = AppleHeadline,
+                                        fontSize = 15.sp
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AppleCardSurfaceSecondary)
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = req.authCode,
+                                        style = AppleHeadline.copy(color = AppleSystemBlue, letterSpacing = 2.sp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { viewModel.acceptConnection(req.peerId) },
+                                    modifier = Modifier.weight(1f).height(38.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = AppleSystemBlue, contentColor = Color.White),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("Confirm Match", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = { viewModel.rejectConnection(req.peerId) },
+                                    modifier = Modifier.weight(1f).height(38.dp),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("Reject", fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // 2. Middle Body: Scrollable Cockpit Content
@@ -713,7 +780,7 @@ private fun ActiveSessionContent(
                             name = peer.name.take(6),
                             initials = peer.name.take(2).uppercase(),
                             isSpeaking = isThisPeerSpeaking,
-                            isOnline = peer.isConnected,
+                            isOnline = peer.isConnected && peer.isAuthenticated,
                             isRelay = false,
                             batteryPercent = peerBatt
                         )
@@ -1446,10 +1513,20 @@ fun NearbyDevicesScreen(
                                         text = peer.name,
                                         style = AppleHeadline
                                     )
+                                    val statusText = when {
+                                        peer.isConnected && peer.isAuthenticated -> "Connected • Link Active"
+                                        peer.isConnected && !peer.isAuthenticated -> "Authenticating • Securing Link…"
+                                        else -> "Nearby • Tap Connect"
+                                    }
+                                    val statusColor = when {
+                                        peer.isConnected && peer.isAuthenticated -> AppleSystemGreen
+                                        peer.isConnected && !peer.isAuthenticated -> AppleSystemOrange
+                                        else -> AppleTextSecondary
+                                    }
                                     Text(
-                                        text = if (peer.isConnected) "Connected • Link Active" else "Nearby • Tap Connect",
+                                        text = statusText,
                                         style = AppleFootnote,
-                                        color = if (peer.isConnected) AppleSystemGreen else AppleTextSecondary
+                                        color = statusColor
                                     )
                                 }
 
@@ -2224,7 +2301,17 @@ fun ContactsScreen(
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column {
                                         Text(text = peer.name, style = AppleHeadline, fontSize = 14.sp)
-                                        Text(text = if (peer.isConnected) "Online • In Range" else "Offline", style = AppleCaption1, color = if (peer.isConnected) AppleSystemGreen else AppleTextTertiary)
+                                        val contactStatus = when {
+                                            peer.isConnected && peer.isAuthenticated -> "Online • Secure Link"
+                                            peer.isConnected && !peer.isAuthenticated -> "Securing Link…"
+                                            else -> "Offline"
+                                        }
+                                        val contactColor = when {
+                                            peer.isConnected && peer.isAuthenticated -> AppleSystemGreen
+                                            peer.isConnected && !peer.isAuthenticated -> AppleSystemOrange
+                                            else -> AppleTextTertiary
+                                        }
+                                        Text(text = contactStatus, style = AppleCaption1, color = contactColor)
                                     }
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {

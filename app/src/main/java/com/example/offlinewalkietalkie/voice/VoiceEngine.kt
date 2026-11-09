@@ -165,13 +165,24 @@ class VoiceEngine(
         senderTimestampMs: Long = 0L
     ) {
         startPlayback()
-        val jb = jitterBuffers.getOrPut(peerId) { 
+        val expectedCodecClass = when (codecType) {
+            AudioCodecType.CODEC2 -> Codec2AudioCodec::class
+            AudioCodecType.OPUS -> OpusCodec::class
+            else -> AmrNbCodec::class
+        }
+        val currentJb = jitterBuffers[peerId]
+        val jb = if (currentJb != null && currentJb.codec::class == expectedCodecClass) {
+            currentJb
+        } else {
             val decoder: AudioCodec = when (codecType) {
                 AudioCodecType.CODEC2 -> Codec2AudioCodec()
                 AudioCodecType.OPUS -> OpusCodec()
                 else -> AmrNbCodec()
             }
-            JitterBuffer(decoder) 
+            currentJb?.reset()
+            val newJb = JitterBuffer(decoder)
+            jitterBuffers[peerId] = newJb
+            newJb
         }
         jb.push(sequence, encodedAudio, senderTimestampMs)
     }

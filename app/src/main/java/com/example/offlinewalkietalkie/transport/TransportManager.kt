@@ -57,12 +57,17 @@ class TransportManager(private val context: Context) {
     val activeTransport: Transport
         get() = transports[_activeTransportType.value] ?: bleGattTransport
 
-    fun setTransportType(type: TransportType) {
+    fun setTransportType(type: TransportType): Boolean {
+        if (!TransportSelector.isTransportAvailable(context, type)) {
+            Log.w(TAG, "Transport $type is not supported on this device. Retaining ${_activeTransportType.value}")
+            return false
+        }
         if (_activeTransportType.value != type) {
             val oldType = _activeTransportType.value
             _activeTransportType.value = type
             Log.i(TAG, "Transport switched from $oldType to $type")
         }
+        return true
     }
 
     val state: StateFlow<TransportState>

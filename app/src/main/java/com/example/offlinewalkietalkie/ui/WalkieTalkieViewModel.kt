@@ -30,6 +30,7 @@ import com.example.offlinewalkietalkie.transport.ConnectionRequest
 import com.example.offlinewalkietalkie.transport.LocalIdentity
 import com.example.offlinewalkietalkie.transport.Peer
 import com.example.offlinewalkietalkie.transport.TransportManager
+import com.example.offlinewalkietalkie.transport.TransportSelector
 import com.example.offlinewalkietalkie.transport.TransportType
 import com.example.offlinewalkietalkie.voice.AmrNbCodec
 import com.example.offlinewalkietalkie.voice.HardwarePttManager
@@ -339,15 +340,32 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             }
         }
 
-        transport.peers.onEach { peerList ->
-            val previouslyConnected = _peers.value.count { it.isConnected }
+        // Phase B: Periodic transparent ECDH re-auth until session key is derived for connected peers
+        viewModelScope.launch {
+            while (isActive) {
+                delay(3000)
+                val unauthed = _peers.value.filter { it.isConnected && !cryptoManager.hasSessionKey(it.id) }
+                unauthed.forEach { peer ->
+                    sendAuthFrame(peer.id)
+                }
+            }
+        }
+
+        transport.peers.onEach { rawPeerList ->
+            val previouslyAuthenticated = _peers.value.count { it.isConnected && it.isAuthenticated }
             val previouslyConnectedIds = _peers.value.filter { it.isConnected }.map { it.id }.toSet()
+
+            // Decorate peers with authenticated state from CryptoManager
+            val peerList = rawPeerList.map { p ->
+                p.copy(isAuthenticated = p.isConnected && cryptoManager.hasSessionKey(p.id))
+            }
             _peers.value = peerList
             val connected = peerList.filter { it.isConnected }
+            val authenticated = peerList.filter { it.isConnected && it.isAuthenticated }
 
             feedGroupDiscovery(peerList)
             feedGroupLinkTransitions(peerList, previouslyConnectedIds)
-            Log.i(TAG, "Peers updated: ${peerList.size} visible, ${connected.size} connected")
+            Log.i(TAG, "Peers updated: ${peerList.size} visible, ${connected.size} link-connected, ${authenticated.size} authenticated")
 
             // A dropped peer's key has to go with it, otherwise the Security tile keeps
             // counting it and a reconnecting endpoint silently reuses a stale key.
@@ -362,13 +380,13 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     sendAuthFrame(peer.id)
                 }
             }
-            _securedPeerCount.value = connected.count { cryptoManager.hasSessionKey(it.id) }
+            _securedPeerCount.value = authenticated.size
 
-            // A live link is what makes a session active; don't require a separate user step.
-            if (connected.isNotEmpty() && !_isInSession.value) {
-                _currentChannelName.value = connected.first().name
+            // Only transition to in-session when cryptographic mutual authentication is complete (§P0-03 & Phase B)
+            if (authenticated.isNotEmpty() && !_isInSession.value) {
+                _currentChannelName.value = authenticated.first().name
                 setInSession(true)
-            } else if (connected.isEmpty() && previouslyConnected > 0) {
+            } else if (authenticated.isEmpty() && previouslyAuthenticated > 0 && _isInSession.value) {
                 setInSession(false)
             }
         }.launchIn(viewModelScope)
@@ -380,9 +398,22 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     val isNew = !cryptoManager.hasSessionKey(peerId)
                     cryptoManager.deriveSessionKey(peerId, decodedFrame.payload)
                     securedPeerIds.add(peerId)
-                    _securedPeerCount.value = _peers.value.count { it.isConnected && cryptoManager.hasSessionKey(it.id) }
-                    Log.i(TAG, "AUTH from $peerId - session key established (secured=${_securedPeerCount.value})")
+                    val authedCount = _peers.value.count { it.isConnected && cryptoManager.hasSessionKey(it.id) }
+                    _securedPeerCount.value = authedCount
+                    Log.i(TAG, "AUTH from $peerId - session key established (secured=$authedCount)")
                     if (isNew) sendAuthFrame(peerId)
+
+                    // Re-evaluate authenticated peers and start session if needed
+                    _peers.value = _peers.value.map { p ->
+                        p.copy(isAuthenticated = p.isConnected && cryptoManager.hasSessionKey(p.id))
+                    }
+                    if (!_isInSession.value) {
+                        val authedPeer = _peers.value.firstOrNull { it.id == peerId && it.isConnected && it.isAuthenticated }
+                        if (authedPeer != null) {
+                            _currentChannelName.value = authedPeer.name
+                            setInSession(true)
+                        }
+                    }
                 }
                 FrameType.FLOOR_REQUEST -> {
                     handleFloorRequest(peerId)
@@ -420,7 +451,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                                 sequence = decodedFrame.sequence,
                                 encodedAudio = plaintext,
                                 codecType = decodedFrame.getCodecType(),
-                                senderTimestampMs = decodedFrame.timestamp.toLong()
+                                senderTimestampMs = decodedFrame.timestamp.toLong() and 0xFFFFFFFFL
                             )
 
                             if (replayBuffer.isEnabled) {
@@ -675,7 +706,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     hopLimit = 0,
                     sessionId = sessionId,
                     sequence = sequence,
-                    timestamp = System.currentTimeMillis().toInt(),
+                    timestamp = (System.currentTimeMillis() and 0xFFFFFFFFL).toInt(),
                     payload = ByteArray(encodedFrame.size)
                 )
                 val headerAad = dummyFrame.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
@@ -862,6 +893,12 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun setTransportType(type: TransportType) {
+        if (!TransportSelector.isTransportAvailable(getApplication<Application>(), type)) {
+            val name = TransportSelector.getDisplayName(type)
+            _transportError.value = "$name is not supported on this device"
+            Log.w(TAG, "Cannot switch to unsupported transport: $type")
+            return
+        }
         _transportType.value = type
         transport.setTransportType(type)
     }
@@ -887,6 +924,11 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun switchToNearbyTransport() {
+        if (!TransportSelector.isTransportAvailable(getApplication<Application>(), TransportType.NEARBY_CONNECTIONS)) {
+            _transportError.value = "Google Nearby Connections is not available on this device"
+            Log.w(TAG, "Google Nearby Connections not available")
+            return
+        }
         Log.i(TAG, "Switching to Google Nearby Connections transport")
         viewModelScope.launch {
             transport.stop()
@@ -897,6 +939,11 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun switchToBleTransport() {
+        if (!TransportSelector.isTransportAvailable(getApplication<Application>(), TransportType.BLE_L2CAP)) {
+            _transportError.value = "BLE L2CAP CoC requires Android 10+ and hardware support"
+            Log.w(TAG, "BLE L2CAP not available")
+            return
+        }
         Log.i(TAG, "Switching to BLE L2CAP transport (Wi-Fi off fallback)")
         viewModelScope.launch {
             transport.stop()
@@ -932,6 +979,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             transport.acceptConnection(peerId)
             _pendingRequest.value = null
+            sendAuthFrame(peerId)
         }
     }
 
@@ -1161,7 +1209,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                         hopLimit = 0,
                         sessionId = sessionId,
                         sequence = newEpoch,
-                        timestamp = System.currentTimeMillis().toInt(),
+                        timestamp = (System.currentTimeMillis() and 0xFFFFFFFFL).toInt(),
                         payload = ByteArray(newKey.size)
                     )
                     val headerAad = dummyFrame.toBytes().copyOfRange(0, Frame.HEADER_SIZE)

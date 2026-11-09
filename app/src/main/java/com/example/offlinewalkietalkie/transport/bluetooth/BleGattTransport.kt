@@ -3,7 +3,10 @@ package com.example.offlinewalkietalkie.transport.bluetooth
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
@@ -89,6 +92,11 @@ class BleGattTransport(private val context: Context) : Transport {
     // Addresses currently in connection flight
     private val connectingAddresses = ConcurrentHashMap.newKeySet<String>()
 
+    // Reconnection tracking for exponential backoff (Phase B)
+    private val reconnectJobs = ConcurrentHashMap<String, Job>()
+    private val reconnectAttempts = ConcurrentHashMap<String, Int>()
+    private val intentionallyDisconnectedPeers = ConcurrentHashMap.newKeySet<String>()
+
     // Outgoing packet sequence counter
     private val outgoingPacketSeq = AtomicInteger(1)
 
@@ -106,6 +114,39 @@ class BleGattTransport(private val context: Context) : Transport {
     private var leScanner: BluetoothLeScanner? = null
     private var localDisplayName: String = Build.MODEL
 
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                if (state == BluetoothAdapter.STATE_ON) {
+                    Log.i(TAG, "Bluetooth turned back ON -> auto-resuming advertising and discovery")
+                    coroutineScope.launch {
+                        delay(600)
+                        if (_isAdvertising.value || _state.value == TransportState.ACTIVE) {
+                            startAdvertising(LocalIdentity(localDisplayName))
+                        }
+                        if (_isDiscovering.value || _state.value == TransportState.ACTIVE) {
+                            startDiscovery(LocalIdentity(localDisplayName))
+                        }
+                    }
+                } else if (state == BluetoothAdapter.STATE_OFF || state == BluetoothAdapter.STATE_TURNING_OFF) {
+                    Log.i(TAG, "Bluetooth turned OFF -> pausing transport")
+                    _state.value = TransportState.IDLE
+                    cancelAllReconnects()
+                }
+            }
+        }
+    }
+
+    init {
+        try {
+            val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+            context.registerReceiver(bluetoothStateReceiver, filter)
+        } catch (e: Throwable) {
+            Log.w(TAG, "Could not register bluetoothStateReceiver", e)
+        }
+    }
+
     // GATT Server Callback (Peripheral Role)
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice?, status: Int, newState: Int) {
@@ -113,6 +154,7 @@ class BleGattTransport(private val context: Context) : Transport {
             val name = device.name?.takeIf { it.isNotBlank() } ?: _peers.value[address]?.name ?: "Peer ${address.takeLast(5)}"
             Log.i(TAG, "GattServer connectionStateChange: $address -> newState=$newState (status=$status)")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                cancelReconnect(address)
                 serverConnectedDevices[address] = device
                 addOrUpdatePeer(address, name, isConnected = true)
 
@@ -139,6 +181,9 @@ class BleGattTransport(private val context: Context) : Transport {
                 serverConnectedDevices.remove(address)
                 val isClientConnected = clientGatts.containsKey(address)
                 addOrUpdatePeer(address, name, isConnected = isClientConnected)
+                if (!isClientConnected && !intentionallyDisconnectedPeers.contains(address) && _state.value == TransportState.ACTIVE) {
+                    scheduleExponentialReconnect(address)
+                }
             }
         }
 
@@ -169,8 +214,13 @@ class BleGattTransport(private val context: Context) : Transport {
             offset: Int,
             value: ByteArray?
         ) {
+            val address = device?.address
             if (responseNeeded) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+            }
+            if (address != null) {
+                val name = device.name?.takeIf { it.isNotBlank() } ?: _peers.value[address]?.name ?: "Peer ${address.takeLast(5)}"
+                addOrUpdatePeer(address, name, isConnected = true)
             }
         }
 
@@ -189,6 +239,7 @@ class BleGattTransport(private val context: Context) : Transport {
             Log.i(TAG, "GattClient connectionStateChange: $address -> newState=$newState (status=$status)")
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                cancelReconnect(address)
                 clientGatts[address] = gatt
                 addOrUpdatePeer(address, name, isConnected = true)
 
@@ -215,6 +266,22 @@ class BleGattTransport(private val context: Context) : Transport {
                 try { gatt.close() } catch (e: Throwable) {}
                 val isServerConnected = serverConnectedDevices.containsKey(address)
                 addOrUpdatePeer(address, name, isConnected = isServerConnected)
+
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    val failures = reconnectAttempts.getOrDefault(address, 0)
+                    if (failures >= 3) {
+                        Log.w(TAG, "Persistent GATT error $status on $address; pruning stale peer to allow fresh scan")
+                        cancelReconnect(address)
+                        val current = _peers.value.toMutableMap()
+                        current.remove(address)
+                        _peers.value = current
+                        return
+                    }
+                }
+
+                if (!isServerConnected && !intentionallyDisconnectedPeers.contains(address) && _state.value == TransportState.ACTIVE) {
+                    scheduleExponentialReconnect(address)
+                }
             }
         }
 
@@ -227,8 +294,11 @@ class BleGattTransport(private val context: Context) : Transport {
                     peerCharacteristics[address] = characteristic
                     Log.i(TAG, "Discovered Walkie-Talkie GATT Characteristic for $address")
 
-                    // Emit connection request for approval and mutual authentication
+                    // Re-publish peer now that GATT characteristic is verified and ready for transmission
                     val peerName = _peers.value[address]?.name ?: "Peer ${address.takeLast(5)}"
+                    addOrUpdatePeer(address, peerName, isConnected = true)
+
+                    // Emit connection request for approval and mutual authentication
                     _connectionRequests.tryEmit(
                         ConnectionRequest(
                             peerId = address,
@@ -361,7 +431,7 @@ class BleGattTransport(private val context: Context) : Transport {
             addOrUpdatePeer(address, name, isConnected = isConn)
 
             // Auto-connect to discovered TalkLoop device during active symmetric discovery
-            if (!isConn && !connectingAddresses.contains(address)) {
+            if (!isConn && !connectingAddresses.contains(address) && !intentionallyDisconnectedPeers.contains(address)) {
                 connectingAddresses.add(address)
                 coroutineScope.launch {
                     Log.i(TAG, "Connecting GATT to discovered TalkLoop peer $name ($address)")
@@ -386,8 +456,45 @@ class BleGattTransport(private val context: Context) : Transport {
         } else {
             name
         }
-        current[address] = Peer(id = address, name = cleanName, isConnected = isConnected)
+        val isAuth = if (isConnected) (existing?.isAuthenticated ?: false) else false
+        current[address] = Peer(id = address, name = cleanName, isConnected = isConnected, isAuthenticated = isAuth)
         _peers.value = current
+    }
+
+    private fun scheduleExponentialReconnect(address: String) {
+        if (reconnectJobs.containsKey(address)) return
+        val attempts = reconnectAttempts.getOrDefault(address, 0)
+        if (attempts >= 6) {
+            Log.i(TAG, "Max reconnect attempts reached for $address (6 attempts). Retaining background discovery.")
+            reconnectAttempts.remove(address)
+            return
+        }
+
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s (capped at 16s)
+        val delayMs = (1000L * (1 shl attempts)).coerceAtMost(16000L)
+        Log.i(TAG, "Scheduling exponential reconnect for $address in ${delayMs}ms (attempt ${attempts + 1}/6)")
+
+        val job = coroutineScope.launch {
+            delay(delayMs)
+            reconnectJobs.remove(address)
+            if (!intentionallyDisconnectedPeers.contains(address) && !clientGatts.containsKey(address) && !serverConnectedDevices.containsKey(address)) {
+                reconnectAttempts[address] = attempts + 1
+                Log.i(TAG, "Executing reconnect attempt ${attempts + 1} for $address")
+                connect(address)
+            }
+        }
+        reconnectJobs[address] = job
+    }
+
+    private fun cancelReconnect(address: String) {
+        reconnectJobs.remove(address)?.cancel()
+        reconnectAttempts.remove(address)
+    }
+
+    private fun cancelAllReconnects() {
+        reconnectJobs.values.forEach { it.cancel() }
+        reconnectJobs.clear()
+        reconnectAttempts.clear()
     }
 
     private fun handleIncomingBytes(address: String, data: ByteArray) {
@@ -564,6 +671,7 @@ class BleGattTransport(private val context: Context) : Transport {
     }
 
     override suspend fun connect(peerId: String) {
+        intentionallyDisconnectedPeers.remove(peerId)
         val device = try {
             bluetoothAdapter?.getRemoteDevice(peerId)
         } catch (e: Throwable) {
@@ -596,6 +704,8 @@ class BleGattTransport(private val context: Context) : Transport {
     }
 
     override suspend fun disconnect(peerId: String) {
+        intentionallyDisconnectedPeers.add(peerId)
+        cancelReconnect(peerId)
         clientGatts.remove(peerId)?.let { gatt ->
             try {
                 gatt.disconnect()
@@ -607,7 +717,7 @@ class BleGattTransport(private val context: Context) : Transport {
         serverConnectedDevices.remove(peerId)
         val current = _peers.value.toMutableMap()
         current[peerId]?.let {
-            current[peerId] = it.copy(isConnected = false)
+            current[peerId] = it.copy(isConnected = false, isAuthenticated = false)
             _peers.value = current
         }
     }
@@ -711,6 +821,11 @@ class BleGattTransport(private val context: Context) : Transport {
         } catch (e: Throwable) {}
         _isDiscovering.value = false
 
+        reconnectJobs.values.forEach { it.cancel() }
+        reconnectJobs.clear()
+        reconnectAttempts.clear()
+        intentionallyDisconnectedPeers.clear()
+
         clientGatts.values.forEach { gatt ->
             try {
                 gatt.disconnect()
@@ -729,6 +844,10 @@ class BleGattTransport(private val context: Context) : Transport {
         } catch (e: Throwable) {}
         gattServer = null
         serverCharacteristic = null
+
+        try {
+            context.unregisterReceiver(bluetoothStateReceiver)
+        } catch (e: Throwable) {}
 
         _peers.value = emptyMap()
         _state.value = TransportState.IDLE
