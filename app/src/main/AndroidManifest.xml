@@ -82,6 +82,7 @@
 
         <service
             android:name=".service.FloatingPttService"
+            android:foregroundServiceType="microphone|connectedDevice"
             android:exported="false" />
     </application>
 </manifest>

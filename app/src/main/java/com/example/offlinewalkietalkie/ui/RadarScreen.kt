@@ -1,5 +1,7 @@
 package com.example.offlinewalkietalkie.ui
 
+import com.example.offlinewalkietalkie.theme.*
+
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.Canvas
@@ -156,17 +158,23 @@ fun RadarScreen(
             }
 
             if (targetPeer != null && targetPeer.latitude != 0.0 && targetPeer.longitude != 0.0) {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(
                     onClick = {
-                        val uri = Uri.parse("google.navigation:q=${targetPeer.latitude},${targetPeer.longitude}")
-                        val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        runCatching { context.startActivity(intent) }
-                    }
+                        val lat = targetPeer.latitude
+                        val lon = targetPeer.longitude
+                        val peerNameEncoded = Uri.encode(targetPeer.peerName)
+                        val navIntent = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=$lat,$lon")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        val geoIntent = Intent(Intent.ACTION_VIEW, Uri.parse("geo:$lat,$lon?q=$lat,$lon($peerNameEncoded)")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        runCatching { context.startActivity(navIntent) }.recoverCatching { context.startActivity(geoIntent) }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().height(44.dp)
                 ) {
-                    Icon(Icons.Default.Navigation, contentDescription = null)
+                    Icon(Icons.Default.Navigation, contentDescription = null, tint = BrightCyan, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Navigate to ${targetPeer.peerName}")
+                    Text("Navigate to ${targetPeer.peerName}", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 }
             }
 

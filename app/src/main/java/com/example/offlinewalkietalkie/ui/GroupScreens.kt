@@ -44,7 +44,7 @@ fun GroupLobbyScreen(
     val isOutdoorMode by viewModel.isOutdoorMode.collectAsState()
     val discovered by viewModel.discoveredGroups.collectAsState()
     val groupState by viewModel.groupState.collectAsState()
-    var groupName by remember { mutableStateOf("") }
+    var groupName by remember { mutableStateOf(android.os.Build.MODEL.take(8).trim().ifBlank { "Alpha" } + " Channel") }
 
     LaunchedEffect(Unit) { viewModel.startNearby() }
 
@@ -144,7 +144,7 @@ fun GroupLobbyScreen(
                         )
                         Spacer(Modifier.width(14.dp))
                         Text(
-                            text = "Looking for groups nearby…",
+                            text = "Looking for groups nearby...",
                             color = Color(0xFFCBD5E1),
                             fontSize = 14.sp
                         )
@@ -244,7 +244,7 @@ fun GroupRoomScreen(
                         text = if (state.isCoordinator) {
                             "You are the host"
                         } else {
-                            "Host: ${state.coordinator?.displayName ?: "…"}"
+                            "Host: ${state.coordinator?.displayName ?: "..."}"
                         },
                         color = ElectricAqua,
                         fontSize = 13.sp
@@ -264,7 +264,7 @@ fun GroupRoomScreen(
                     )
                     if (state.pending.isNotEmpty()) {
                         Text(
-                            text = "${state.pending.size} still connecting…",
+                            text = "${state.pending.size} still connecting...",
                             color = WarmAmber,
                             fontSize = 13.sp
                         )
@@ -319,7 +319,7 @@ fun GroupRoomScreen(
                 modifier = Modifier.fillMaxWidth().height(54.dp)
             ) {
                 Text(
-                    text = if (state.connected.isEmpty()) "Waiting for a device…" else "Start Talking",
+                    text = if (state.connected.isEmpty()) "Waiting for a device..." else "Start Talking",
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -444,9 +444,9 @@ private fun statusLabel(member: GroupMember, isLocal: Boolean): String = when {
     isLocal -> "This device"
     member.state == MemberState.CONNECTED && !member.isDirect -> "Connected via relay"
     member.state == MemberState.CONNECTED -> "Connected"
-    member.state == MemberState.CONNECTING -> "Connecting…"
+    member.state == MemberState.CONNECTING -> "Connecting..."
     member.state == MemberState.PENDING_APPROVAL -> "Wants to join"
-    member.state == MemberState.RECONNECTING -> "Reconnecting…"
+    member.state == MemberState.RECONNECTING -> "Reconnecting..."
     member.state == MemberState.FAILED -> member.failureReason ?: "Could not connect"
     member.state == MemberState.DISCOVERED -> "Found nearby"
     member.state == MemberState.LEFT -> "Left the group"

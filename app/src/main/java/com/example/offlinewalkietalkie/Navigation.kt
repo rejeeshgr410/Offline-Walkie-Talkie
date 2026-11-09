@@ -127,7 +127,10 @@ fun MainNavigation(viewModel: WalkieTalkieViewModel = viewModel()) {
                             while (backStack.remove(GroupRoom)) { /* drain */ }
                             while (backStack.remove(GroupLobby)) { /* drain */ }
                         },
-                        onBack = { backStack.removeLastOrNull() }
+                        onBack = {
+                            while (backStack.remove(GroupRoom)) { /* drain */ }
+                            while (backStack.remove(GroupLobby)) { /* drain */ }
+                        }
                     )
                 }
                 entry<CreateChannel> {

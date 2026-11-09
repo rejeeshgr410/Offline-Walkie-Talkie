@@ -23,7 +23,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.offlinewalkietalkie.data.OfflineMapArea
-import com.example.offlinewalkietalkie.theme.AtmosphericDarkBrush
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.example.offlinewalkietalkie.theme.*
 import com.example.offlinewalkietalkie.ui.components.GlassSurface
 
 @Composable
@@ -148,12 +149,55 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                 item {
                     GlassSurface(cornerRadius = 18.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(name, { name = it }, label = { Text("Area name") }, singleLine = true)
+                            val fieldColors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = ElectricAqua,
+                                unfocusedBorderColor = GlassBorder,
+                                cursorColor = ElectricAqua,
+                                focusedLabelColor = ElectricAqua,
+                                unfocusedLabelColor = Color(0xFF94A3B8)
+                            )
+                            val fieldShape = RoundedCornerShape(12.dp)
+
+                            OutlinedTextField(
+                                value = name,
+                                onValueChange = { name = it },
+                                label = { Text("Area name") },
+                                colors = fieldColors,
+                                shape = fieldShape,
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(latitude, { latitude = it }, label = { Text("Latitude") }, modifier = Modifier.weight(1f), singleLine = true)
-                                OutlinedTextField(longitude, { longitude = it }, label = { Text("Longitude") }, modifier = Modifier.weight(1f), singleLine = true)
+                                OutlinedTextField(
+                                    value = latitude,
+                                    onValueChange = { latitude = it },
+                                    label = { Text("Latitude") },
+                                    colors = fieldColors,
+                                    shape = fieldShape,
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = longitude,
+                                    onValueChange = { longitude = it },
+                                    label = { Text("Longitude") },
+                                    colors = fieldColors,
+                                    shape = fieldShape,
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
                             }
-                            OutlinedTextField(radius, { radius = it }, label = { Text("Radius (0.2–2 km)") }, singleLine = true)
+                            OutlinedTextField(
+                                value = radius,
+                                onValueChange = { radius = it },
+                                label = { Text("Radius (0.2 - 2.0 km)") },
+                                colors = fieldColors,
+                                shape = fieldShape,
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                             Text("Downloads road geometry from OpenStreetMap. Attribution: © OpenStreetMap contributors. Requires internet; public service limits apply.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
                             if (progress != null) {
                                 LinearProgressIndicator(Modifier.fillMaxWidth())

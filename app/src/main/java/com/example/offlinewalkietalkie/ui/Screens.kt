@@ -554,6 +554,52 @@ private fun ActiveSessionContent(
                 }
             )
         }
+        if (isMuted) {
+            GlassSurface(
+                cornerRadius = 16.dp,
+                isOutdoorMode = isOutdoorMode,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.VolumeOff,
+                            contentDescription = null,
+                            tint = WarmAmber,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Live audio muted",
+                                color = WarmAmber,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Transmissions are saved to voice history",
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                    TextButton(onClick = onToggleMute) {
+                        Text(
+                            text = "Unmute",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+        }
         // Current Channel Glass Card
         GlassSurface(
             cornerRadius = 26.dp,
@@ -651,51 +697,57 @@ private fun ActiveSessionContent(
             }
         }
 
-        // Central Luminous PTT Section
+        // Central Luminous PTT Section with Symmetrical Cockpit Controls
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 6.dp),
+                .padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Match the dedicated receive mute control exposed by the reference intercom.
-            Button(
-                onClick = {
-                    if (isMuted) onToggleMute() else showMuteConfirmation = true
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isMuted) Color(0xFFFFB74D) else Color(0xFF1E293B),
-                    contentColor = Color.White
-                ),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.size(width = 58.dp, height = 42.dp)
+            // Left Quick Pods: Audio Route & Live Audio Mute
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Icon(
-                    imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                    contentDescription = if (isMuted) "Unmute live audio" else "Mute live audio",
-                    modifier = Modifier.size(21.dp)
-                )
-            }
-            // Speaker Route Shortcut
-            GlassSurface(
-                cornerRadius = 16.dp,
-                isOutdoorMode = isOutdoorMode,
-                modifier = Modifier
-                    .size(48.dp)
-                    .clickable { onToggleSpeaker() }
-            ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(
-                        imageVector = if (speakerphoneEnabled) Icons.Default.VolumeUp else Icons.Default.Headset,
-                        contentDescription = if (speakerphoneEnabled) stringResource(R.string.speaker) else stringResource(R.string.earpiece),
-                        tint = if (speakerphoneEnabled) ElectricAqua else Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
+                GlassSurface(
+                    cornerRadius = 16.dp,
+                    isOutdoorMode = isOutdoorMode,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clickable { onToggleSpeaker() }
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            imageVector = if (speakerphoneEnabled) Icons.Default.VolumeUp else Icons.Default.Headset,
+                            contentDescription = if (speakerphoneEnabled) stringResource(R.string.speaker) else stringResource(R.string.earpiece),
+                            tint = if (speakerphoneEnabled) ElectricAqua else Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+
+                GlassSurface(
+                    cornerRadius = 16.dp,
+                    isOutdoorMode = isOutdoorMode,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clickable {
+                            if (isMuted) onToggleMute() else showMuteConfirmation = true
+                        }
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                            contentDescription = if (isMuted) "Unmute live audio" else "Mute live audio",
+                            tint = if (isMuted) WarmAmber else Color.White.copy(alpha = 0.75f),
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
 
-            // 176dp Luminous PTT Orb
+            // 176dp Luminous PTT Orb (Centered)
             PttOrb(
                 floorState = floorState,
                 isOutdoorMode = isOutdoorMode,
@@ -703,21 +755,43 @@ private fun ActiveSessionContent(
                 onPressEnd = onPttEnd
             )
 
-            // Roster / Contacts Shortcut
-            GlassSurface(
-                cornerRadius = 16.dp,
-                isOutdoorMode = isOutdoorMode,
-                modifier = Modifier
-                    .size(48.dp)
-                    .clickable { onNavigateToContacts() }
+            // Right Quick Pods: Roster / Contacts & 1-Tap Replay Last
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(
-                        imageVector = Icons.Default.People,
-                        contentDescription = stringResource(R.string.roster),
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
+                GlassSurface(
+                    cornerRadius = 16.dp,
+                    isOutdoorMode = isOutdoorMode,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clickable { onNavigateToContacts() }
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            imageVector = Icons.Default.People,
+                            contentDescription = stringResource(R.string.roster),
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+
+                GlassSurface(
+                    cornerRadius = 16.dp,
+                    isOutdoorMode = isOutdoorMode,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clickable { onReplayLast() }
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            imageVector = Icons.Default.Replay,
+                            contentDescription = "Replay last audio transmission",
+                            tint = BrightCyan,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
         }
@@ -1669,31 +1743,77 @@ fun SettingsScreen(
 
             GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Intercom controls", color = Color.White, fontWeight = FontWeight.Bold)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Intercom Controls & Policy", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.setAllowIncomingRequests(!allowIncomingRequests) }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Allow incoming requests", color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text(if (allowIncomingRequests) "New devices wait for your approval" else "Incoming requests are rejected", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                            Text("Allow incoming requests", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Text(if (allowIncomingRequests) "New devices wait for your approval" else "Incoming requests are rejected", color = Color(0xFFCBD5E1), fontSize = 12.sp)
                         }
                         Switch(checked = allowIncomingRequests, onCheckedChange = viewModel::setAllowIncomingRequests)
                     }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.setDisturbanceMode(!disturbanceMode) }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Disturbance mode", color = Color.White, fontWeight = FontWeight.Bold)
-                            Text("Keep SOS alerts visible but silence their alarm", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                            Text("Disturbance mode", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Text("Keep SOS alerts visible but silence their audible siren", color = Color(0xFFCBD5E1), fontSize = 12.sp)
                         }
                         Switch(checked = disturbanceMode, onCheckedChange = viewModel::setDisturbanceMode)
                     }
-                    OutlinedButton(onClick = { viewModel.markTextMessagesRead() }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Mark received messages read")
+                    Button(
+                        onClick = { viewModel.markTextMessagesRead() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(42.dp)
+                    ) {
+                        Text("Mark Received Messages Read", fontSize = 12.sp, color = Color.White)
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            OutlinedButton(onClick = { onOpenOfflineMaps() }, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Map, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Offline maps")
+            Spacer(modifier = Modifier.height(14.dp))
+            // Offline Maps Hub Card
+            GlassSurface(
+                cornerRadius = 18.dp,
+                isOutdoorMode = isOutdoorMode,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenOfflineMaps() }
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(BrightCyan.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Map, contentDescription = null, tint = BrightCyan, modifier = Modifier.size(22.dp))
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text("Offline Maps Manager", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text("Download & preview local OSM vector road networks", color = Color(0xFFCBD5E1), fontSize = 12.sp)
+                        }
+                    }
+                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
+                }
             }
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -1727,7 +1847,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0x22FFFFFF))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
 
                     // Audio Loopback Test
                     Row(
@@ -1756,7 +1876,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0x22FFFFFF))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
 
                     // Speakerphone vs Earpiece
                     Row(
@@ -1782,7 +1902,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0x22FFFFFF))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
 
                     // Floating PTT Bubble (SYSTEM_ALERT_WINDOW)
                     val isFloatingActive by viewModel.isFloatingPttActive.collectAsState()
@@ -1823,7 +1943,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0x22FFFFFF))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
 
                     // Pocket Mode: Hardware Volume Key PTT
                     val isVolumePtt by viewModel.isVolumeKeyPttEnabled.collectAsState()
@@ -1850,7 +1970,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0x22FFFFFF))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
 
                     // Bluetooth SCO Headset
                     val isScoActive by viewModel.isBluetoothScoActive.collectAsState()
