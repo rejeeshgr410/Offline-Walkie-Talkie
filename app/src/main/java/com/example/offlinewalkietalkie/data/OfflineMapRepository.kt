@@ -7,16 +7,46 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-data class OfflineMapArea(val id: String, val name: String, val latitude: Double, val longitude: Double, val radiusKm: Double, val roadCount: Int, val file: File)
+data class OfflineMapArea(
+    val id: String,
+    val name: String,
+    val latitude: Double,
+    val longitude: Double,
+    val radiusKm: Double,
+    val roadCount: Int,
+    val file: File
+)
+
 data class OfflineMapPoint(val latitude: Double, val longitude: Double)
 
-/** Downloads a bounded road extract from OpenStreetMap's Overpass API for offline reference. */
+/**
+ * Manages offline vector map packs, downloads bounded road networks from OSM Overpass API,
+ * manages local storage quotas (up to 250MB), and verifies pack geometry.
+ */
 class OfflineMapRepository(private val context: Context) {
+    companion object {
+        const val MAX_STORAGE_QUOTA_BYTES = 250L * 1024 * 1024 // 250 MB Storage Quota
+    }
+
     private val directory = File(context.filesDir, "offline-map-areas").apply { mkdirs() }
     @Volatile private var activeConnection: HttpURLConnection? = null
 
     init {
         unpackBundledPacksIfNeeded()
+    }
+
+    fun getStorageUsedBytes(): Long {
+        return directory.listFiles()?.sumOf { it.length() } ?: 0L
+    }
+
+    fun getStorageQuotaBytes(): Long = MAX_STORAGE_QUOTA_BYTES
+
+    fun deleteAllDownloadedAreas(): Boolean {
+        var allDeleted = true
+        directory.listFiles()?.forEach { file ->
+            if (!file.delete()) allDeleted = false
+        }
+        return allDeleted
     }
 
     private fun unpackBundledPacksIfNeeded() {
@@ -59,6 +89,11 @@ class OfflineMapRepository(private val context: Context) {
     fun download(name: String, latitude: Double, longitude: Double, radiusKm: Double, onProgress: (Long) -> Unit): OfflineMapArea {
         require(latitude in -85.0..85.0 && longitude in -180.0..180.0)
         require(radiusKm in 0.2..2.0) { "Choose an area radius from 0.2 to 2 km." }
+
+        if (getStorageUsedBytes() >= MAX_STORAGE_QUOTA_BYTES) {
+            throw IllegalStateException("Storage quota exceeded (250 MB). Delete older areas to free space.")
+        }
+
         val radiusMeters = (radiusKm * 1000).toInt()
         val query = "[out:json][timeout:60];(way[\"highway\"](around:$radiusMeters,$latitude,$longitude););out geom;"
         val body = "data=${URLEncoder.encode(query, "UTF-8")}".toByteArray(Charsets.UTF_8)
@@ -83,6 +118,9 @@ class OfflineMapRepository(private val context: Context) {
                     output.append(buffer, 0, count)
                     onProgress(output.length.toLong())
                     require(output.length <= 15_000_000) { "This map area is too large. Choose a smaller radius." }
+                    if (getStorageUsedBytes() + output.length > MAX_STORAGE_QUOTA_BYTES) {
+                        throw IllegalStateException("Storage quota limit reached (250 MB). Download stopped.")
+                    }
                 }
             }
             val osm = JSONObject(output.toString())

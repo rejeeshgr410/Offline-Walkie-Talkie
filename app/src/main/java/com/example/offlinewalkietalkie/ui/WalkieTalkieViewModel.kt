@@ -21,6 +21,7 @@ import com.example.offlinewalkietalkie.protocol.FrameType
 import com.example.offlinewalkietalkie.protocol.PeerLocation
 import com.example.offlinewalkietalkie.protocol.PeerTelemetry
 import com.example.offlinewalkietalkie.protocol.SosBeacon
+import com.example.offlinewalkietalkie.protocol.SosAck
 import com.example.offlinewalkietalkie.radar.CompassManager
 import com.example.offlinewalkietalkie.radar.LocationProvider
 import com.example.offlinewalkietalkie.service.FloatingPttService
@@ -200,6 +201,10 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     val mySosBeacon = sosManager.mySosBeacon
     val incomingAlerts = sosManager.incomingAlerts
     val isAlarmPlaying = sosManager.isAlarmPlaying
+    val acknowledgedResponders = sosManager.acknowledgedResponders
+
+    val offlineMapStorageUsed = MutableStateFlow(offlineMapRepository.getStorageUsedBytes())
+    val offlineMapStorageQuota: Long = offlineMapRepository.getStorageQuotaBytes()
 
     // --- 2. Offline GPS Radar & Directional Compass ---
     val locationProvider = LocationProvider(application)
@@ -296,6 +301,10 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         locationProvider.startTracking()
         compassManager.start()
         telemetryManager.start()
+
+        sosManager.onSendAck = { ack, ingressPeerId ->
+            broadcastSosAckFrame(ack, ingressPeerId)
+        }
 
         // Vivo OEM style: Auto-start BLE Long-Range discovery & advertising
         startNearby()
@@ -578,6 +587,12 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                         updateFloatingOverlay(FloatingPttService.STATE_SOS, "SOS!")
                     }
                 }
+                FrameType.SOS_ACK -> {
+                    val ack = SosAck.decode(decodedFrame.payload)
+                    if (ack != null) {
+                        sosManager.handleIncomingSosAck(ack)
+                    }
+                }
                 FrameType.LOCATION_RADAR -> {
                     val loc = PeerLocation.decode(decodedFrame.payload)
                     if (loc != null) {
@@ -631,9 +646,10 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         }
         activePeers.forEach { targetPeer ->
             if (!cryptoManager.hasSessionKey(targetPeer.id)) return@forEach
+            val codecFlags = (decodedFrame.flags.toInt() and Frame.FLAG_CODEC_MASK.toInt()).toByte()
             val dummyFwd = Frame(
                 type = FrameType.VOICE,
-                flags = Frame.FLAG_ENCRYPTED,
+                flags = (Frame.FLAG_ENCRYPTED.toInt() or codecFlags.toInt()).toByte(),
                 hopLimit = 0,
                 sessionId = decodedFrame.sessionId,
                 sequence = decodedFrame.sequence,
@@ -1015,6 +1031,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                 }
                 _offlineMapAreas.value = offlineMapRepository.list()
                 _offlineMapProgressBytes.value = null
+                refreshOfflineMapStorage()
             } catch (e: CancellationException) {
                 _offlineMapProgressBytes.value = null
                 throw e
@@ -1034,11 +1051,25 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     fun restoreBundledMapPacks() {
         _offlineMapAreas.value = offlineMapRepository.restoreBundledPacks()
+        refreshOfflineMapStorage()
+    }
+
+    fun refreshOfflineMapStorage() {
+        offlineMapStorageUsed.value = offlineMapRepository.getStorageUsedBytes()
+    }
+
+    fun clearAllOfflineMaps() {
+        offlineMapRepository.deleteAllDownloadedAreas()
+        _offlineMapAreas.value = offlineMapRepository.list()
+        _selectedOfflineMap.value = null
+        _selectedOfflineMapRoads.value = emptyList()
+        refreshOfflineMapStorage()
     }
 
     fun deleteOfflineMap(area: OfflineMapArea) {
         offlineMapRepository.delete(area)
         _offlineMapAreas.value = offlineMapRepository.list()
+        refreshOfflineMapStorage()
         if (_selectedOfflineMap.value?.id == area.id) closeOfflineMap()
     }
 
@@ -1378,6 +1409,23 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     fun silenceAlarm() = sosManager.silenceAlarm()
 
     fun dismissSosAlert(senderId: String) = sosManager.dismissAlert(senderId)
+
+    private suspend fun broadcastSosAckFrame(ack: SosAck, ingressPeerId: String?) {
+        val payload = ack.toBytes()
+        val frame = Frame(
+            type = FrameType.SOS_ACK,
+            flags = 0,
+            hopLimit = 3,
+            sessionId = sessionId,
+            sequence = controlSequence.incrementAndGet(),
+            timestamp = (System.currentTimeMillis() and 0xFFFFFFFFL).toInt(),
+            payload = payload
+        )
+        val bytes = frame.toBytes()
+        _peers.value.filter { it.isConnected && it.id != ingressPeerId }.forEach {
+            transport.send(it.id, bytes)
+        }
+    }
 
     private suspend fun broadcastSosFrame(beacon: SosBeacon, ingressPeerId: String?) {
         val payload = beacon.toBytes()

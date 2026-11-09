@@ -2,6 +2,7 @@ package com.example.offlinewalkietalkie.sos
 
 import android.location.Location
 import android.util.Log
+import com.example.offlinewalkietalkie.protocol.SosAck
 import com.example.offlinewalkietalkie.protocol.SosBeacon
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,7 +16,7 @@ import java.util.Collections
 
 /**
  * Manages offline SOS distress beacon broadcasting, multi-hop mesh forwarding,
- * and high-priority audible alerting.
+ * high-priority audible alerting, and delivery acknowledgment receipts.
  */
 class SosManager(
     private val localSenderId: String,
@@ -42,6 +43,11 @@ class SosManager(
     private val _isAlarmPlaying = MutableStateFlow(false)
     val isAlarmPlaying = _isAlarmPlaying.asStateFlow()
 
+    private val _acknowledgedResponders = MutableStateFlow<List<SosAck>>(emptyList())
+    val acknowledgedResponders = _acknowledgedResponders.asStateFlow()
+
+    var onSendAck: (suspend (SosAck, ingressPeerId: String?) -> Unit)? = null
+
     private var broadcastJob: Job? = null
 
     // Deduplication cache for incoming alerts: key = "${senderId}_${timestamp}"
@@ -66,6 +72,7 @@ class SosManager(
 
         _mySosBeacon.value = beacon
         _isBroadcastingSos.value = true
+        _acknowledgedResponders.value = emptyList()
 
         broadcastJob?.cancel()
         broadcastJob = scope.launch {
@@ -87,6 +94,7 @@ class SosManager(
         broadcastJob?.cancel()
         broadcastJob = null
         _mySosBeacon.value = null
+        _acknowledgedResponders.value = emptyList()
     }
 
     suspend fun handleIncomingSos(beacon: SosBeacon, ingressPeerId: String?) {
@@ -101,6 +109,20 @@ class SosManager(
         currentList.add(0, beacon)
         _incomingAlerts.value = currentList
 
+        // Immediately transmit SOS_ACK back across mesh to distress sender
+        val ack = SosAck(
+            sosSenderId = beacon.senderId,
+            sosTimestamp = beacon.timestamp,
+            responderId = localSenderId,
+            responderName = localSenderName,
+            ackTimestamp = System.currentTimeMillis()
+        )
+        try {
+            onSendAck?.invoke(ack, ingressPeerId)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send SOS_ACK: ${e.message}")
+        }
+
         if (isFirstTimeSeen) {
             Log.w(TAG, "EMERGENCY SOS ALERT RECEIVED from ${beacon.senderName}: '${beacon.distressMessage}' at (${beacon.latitude}, ${beacon.longitude})")
             alarmPlayer.startAlarm()
@@ -112,6 +134,15 @@ class SosManager(
             val relayBeacon = beacon.copy(ttl = beacon.ttl - 1)
             Log.i(TAG, "Mesh relaying SOS beacon from ${beacon.senderName} (remaining TTL=${relayBeacon.ttl})")
             broadcastFrame(relayBeacon, ingressPeerId)
+        }
+    }
+
+    fun handleIncomingSosAck(ack: SosAck) {
+        if (ack.sosSenderId != localSenderId) return
+        val current = _acknowledgedResponders.value
+        if (current.none { it.responderId == ack.responderId }) {
+            _acknowledgedResponders.value = current + ack
+            Log.i(TAG, "Distress beacon ACK receipt confirmed from responder: ${ack.responderName} (${ack.responderId})")
         }
     }
 

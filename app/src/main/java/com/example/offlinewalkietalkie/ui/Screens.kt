@@ -340,7 +340,7 @@ fun HomeScreen(
                     onOpenHistory = onNavigateToHistory
                 )
 
-                // SOS Emergency Alert Banner
+                // SOS Emergency Alert Banner (Incoming distress from other peers)
                 SosAlertBanner(
                     alerts = incomingAlerts,
                     isAlarmPlaying = isAlarmPlaying,
@@ -348,6 +348,17 @@ fun HomeScreen(
                     onDismissAlert = { id -> viewModel.dismissSosAlert(id) },
                     onNavigateToRadar = onNavigateToRadar
                 )
+
+                // SOS Active Distress Broadcast Status Banner (When I am broadcasting)
+                val mySosBeacon by viewModel.mySosBeacon.collectAsState()
+                val acknowledgedResponders by viewModel.acknowledgedResponders.collectAsState()
+                if (isBroadcastingSos) {
+                    SosBroadcastingStatusBanner(
+                        beacon = mySosBeacon,
+                        responders = acknowledgedResponders,
+                        onStopSos = { viewModel.stopSos() }
+                    )
+                }
 
                 // Pending Pairing Request Banner (Apple Security Modal in Dashboard)
                 val pendingRequest by viewModel.pendingRequest.collectAsState()

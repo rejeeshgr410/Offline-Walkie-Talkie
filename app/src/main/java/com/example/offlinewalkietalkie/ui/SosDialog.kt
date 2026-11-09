@@ -12,6 +12,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.CheckCircle
+import com.example.offlinewalkietalkie.protocol.SosAck
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -104,6 +106,25 @@ fun SosAlertBanner(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                val now = System.currentTimeMillis()
+                val ageSec = ((now - topAlert.timestamp) / 1000).coerceAtLeast(0)
+                val isGpsValid = !(topAlert.latitude == 0.0 && topAlert.longitude == 0.0)
+
+                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    Text(
+                        text = if (isGpsValid) "GPS: ${"%.4f".format(topAlert.latitude)}, ${"%.4f".format(topAlert.longitude)} • Alt: ${topAlert.altitude.toInt()}m"
+                               else "⚠️ No GPS coordinates attached (approximate location unknown)",
+                        color = if (isGpsValid) Color.White.copy(alpha = 0.9f) else AppleSystemYellow,
+                        style = AppleCaption1,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (ageSec > 300) "⚠️ Transmitted ${ageSec / 60}m ago (Stale)" else "Live fix • ${ageSec}s ago • Hop TTL: ${topAlert.ttl}",
+                        color = Color.White.copy(alpha = 0.75f),
+                        style = AppleCaption2
+                    )
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -154,6 +175,123 @@ fun SosAlertBanner(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Apple Emergency SOS Broadcasting Status Banner with confirmed mesh responder receipts.
+ */
+@Composable
+fun SosBroadcastingStatusBanner(
+    beacon: SosBeacon?,
+    responders: List<SosAck>,
+    onStopSos: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = AppleSystemRed),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(18.dp))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color.White),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Broadcasting Distress",
+                        tint = AppleSystemRed,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "EMERGENCY SOS ACTIVE",
+                        color = Color.White,
+                        style = AppleHeadline,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = beacon?.distressMessage ?: "Distress Beacon Broadcasting",
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = AppleBody,
+                        fontSize = 13.sp
+                    )
+                }
+            }
+
+            // Delivery Acknowledgment Receipts Card
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color.Black.copy(alpha = 0.35f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (responders.isNotEmpty()) Icons.Default.CheckCircle else Icons.Default.Radar,
+                        contentDescription = null,
+                        tint = if (responders.isNotEmpty()) AppleSystemGreen else AppleSystemYellow,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = if (responders.isNotEmpty()) {
+                                "Delivered to ${responders.size} responder(s):"
+                            } else {
+                                "Broadcasting on all offline mesh hops…"
+                            },
+                            color = Color.White,
+                            style = AppleCaption1,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (responders.isNotEmpty()) {
+                                responders.joinToString(", ") { it.responderName }
+                            } else {
+                                "Waiting for mesh peer acknowledgments"
+                            },
+                            color = Color.White.copy(alpha = 0.85f),
+                            style = AppleCaption2
+                        )
+                    }
+                }
+            }
+
+            Button(
+                onClick = onStopSos,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.White,
+                    contentColor = AppleSystemRed
+                ),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth().height(38.dp)
+            ) {
+                Text("Stop SOS Broadcast", fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
         }
     }

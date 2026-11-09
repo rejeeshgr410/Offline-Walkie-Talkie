@@ -111,6 +111,8 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
     val error by viewModel.offlineMapError.collectAsState()
     val selectedArea by viewModel.selectedOfflineMap.collectAsState()
     val roadLines by viewModel.selectedOfflineMapRoads.collectAsState()
+    val storageUsed by viewModel.offlineMapStorageUsed.collectAsState()
+    val storageQuota = viewModel.offlineMapStorageQuota
     var name by rememberSaveable { mutableStateOf("My Area") }
     val loc by viewModel.currentLocation.collectAsState()
     var latitude by rememberSaveable { mutableStateOf(loc?.latitude?.toString() ?: "25.2048") }
@@ -130,6 +132,43 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                 }
             }
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 10.dp)) {
+                item {
+                    val usedKb = (storageUsed / 1024).coerceAtLeast(1)
+                    val quotaMb = (storageQuota / (1024 * 1024)).toInt()
+                    val progressRatio = (storageUsed.toFloat() / storageQuota.toFloat()).coerceIn(0f, 1f)
+                    GlassSurface(cornerRadius = 20.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("STORAGE QUOTA & CACHE", style = AppleCaption2)
+                                if (areas.isNotEmpty()) {
+                                    TextButton(
+                                        onClick = { viewModel.clearAllOfflineMaps() },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("Purge All Packs", color = AppleSystemRed, style = AppleCaption1, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                            }
+                            LinearProgressIndicator(
+                                progress = { progressRatio },
+                                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                                color = if (progressRatio > 0.85f) AppleSystemOrange else AppleSystemBlue,
+                                trackColor = AppleCardSurfaceSecondary
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("$usedKb KB used", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
+                                Text("$quotaMb MB storage limit", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextTertiary))
+                            }
+                        }
+                    }
+                }
                 if (selectedArea != null) item {
                     GlassSurface(cornerRadius = 20.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp)) {

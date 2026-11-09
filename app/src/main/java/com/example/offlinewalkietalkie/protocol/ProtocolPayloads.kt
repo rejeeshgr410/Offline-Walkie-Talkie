@@ -97,6 +97,69 @@ data class SosBeacon(
 /**
  * Data payload for peer location and compass telemetry sharing.
  */
+
+
+/**
+ * Data payload acknowledging receipt of an emergency SOS distress beacon across mesh.
+ */
+data class SosAck(
+    val sosSenderId: String,
+    val sosTimestamp: Long,
+    val responderId: String,
+    val responderName: String,
+    val ackTimestamp: Long = System.currentTimeMillis()
+) {
+    fun toBytes(): ByteArray {
+        val sosIdBytes = sosSenderId.toByteArray(StandardCharsets.UTF_8)
+        val respIdBytes = responderId.toByteArray(StandardCharsets.UTF_8)
+        val respNameBytes = responderName.toByteArray(StandardCharsets.UTF_8)
+
+        val size = 8 + 8 + 2 + sosIdBytes.size + 2 + respIdBytes.size + 2 + respNameBytes.size
+        val buf = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN)
+        buf.putLong(sosTimestamp)
+        buf.putLong(ackTimestamp)
+        buf.putShort(sosIdBytes.size.toShort())
+        buf.put(sosIdBytes)
+        buf.putShort(respIdBytes.size.toShort())
+        buf.put(respIdBytes)
+        buf.putShort(respNameBytes.size.toShort())
+        buf.put(respNameBytes)
+        return buf.array()
+    }
+
+    companion object {
+        fun decode(bytes: ByteArray): SosAck? {
+            if (bytes.size < 22) return null
+            return try {
+                val buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
+                val sosTime = buf.long
+                val ackTime = buf.long
+
+                val sosIdLen = buf.short.toInt() and 0xFFFF
+                if (buf.remaining() < sosIdLen) return null
+                val sosIdBytes = ByteArray(sosIdLen)
+                buf.get(sosIdBytes)
+                val sosSenderId = String(sosIdBytes, StandardCharsets.UTF_8)
+
+                val respIdLen = buf.short.toInt() and 0xFFFF
+                if (buf.remaining() < respIdLen) return null
+                val respIdBytes = ByteArray(respIdLen)
+                buf.get(respIdBytes)
+                val responderId = String(respIdBytes, StandardCharsets.UTF_8)
+
+                val respNameLen = buf.short.toInt() and 0xFFFF
+                if (buf.remaining() < respNameLen) return null
+                val respNameBytes = ByteArray(respNameLen)
+                buf.get(respNameBytes)
+                val responderName = String(respNameBytes, StandardCharsets.UTF_8)
+
+                SosAck(sosSenderId, sosTime, responderId, responderName, ackTime)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+}
 data class PeerLocation(
     val peerId: String,
     val peerName: String,
