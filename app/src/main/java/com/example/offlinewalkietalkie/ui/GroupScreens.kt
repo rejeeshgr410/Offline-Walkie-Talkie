@@ -9,7 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
@@ -32,8 +32,7 @@ import com.example.offlinewalkietalkie.theme.*
 import com.example.offlinewalkietalkie.ui.components.GlassSurface
 
 /**
- * Entry point for multi-device connection: create a group, or join one that is nearby.
- * Deliberately only two choices, so there is no decision to get wrong.
+ * Apple-inspired Group Lobby Screen.
  */
 @Composable
 fun GroupLobbyScreen(
@@ -48,7 +47,6 @@ fun GroupLobbyScreen(
 
     LaunchedEffect(Unit) { viewModel.startNearby() }
 
-    // The moment we belong to a group, move on to the roster.
     LaunchedEffect(groupState.isInGroup) {
         if (groupState.isInGroup) onGroupReady()
     }
@@ -56,97 +54,103 @@ fun GroupLobbyScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AtmosphericDarkBrush)
+            .background(AppleBackground)
             .safeDrawingPadding()
             .padding(16.dp)
     ) {
         Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
                 }
-                Text(
-                    text = "Connect Devices",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
-                )
+                Column {
+                    Text(
+                        text = "Connect Devices",
+                        style = AppleTitle2
+                    )
+                    Text(
+                        text = "Host or join an offline mesh talk group",
+                        style = AppleFootnote,
+                        color = AppleTextSecondary
+                    )
+                }
             }
 
             Spacer(Modifier.height(16.dp))
 
-            GlassSurface(isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
+            GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp)) {
                     Text(
-                        text = "Start a new group",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 17.sp
+                        text = "START A NEW GROUP",
+                        style = AppleCaption2
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "You become the host. Everyone else picks your group from their list.",
-                        color = Color(0xFF9FB3C8),
-                        fontSize = 13.sp
+                        text = "You become the host. Nearby devices can discover and join your channel.",
+                        style = AppleFootnote,
+                        color = AppleTextSecondary
                     )
                     Spacer(Modifier.height(14.dp))
                     OutlinedTextField(
                         value = groupName,
-                        onValueChange = { groupName = it.take(16) },
-                        placeholder = { Text("Group name", color = Color(0xFF7A8CA0)) },
+                        onValueChange = { groupName = it.take(20) },
+                        placeholder = { Text("Channel Name", style = AppleFootnote) },
                         singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White,
-                            focusedBorderColor = ElectricAqua,
-                            unfocusedBorderColor = GlassBorder,
-                            cursorColor = ElectricAqua
+                            focusedBorderColor = AppleSystemBlue,
+                            unfocusedBorderColor = AppleGlassBorder,
+                            focusedContainerColor = AppleCardSurfaceSecondary,
+                            unfocusedContainerColor = AppleCardSurfaceSecondary,
+                            cursorColor = AppleSystemBlue
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(14.dp))
                     Button(
                         onClick = { viewModel.createGroup(groupName.trim()) },
                         enabled = groupName.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = ElectricAqua,
-                            contentColor = Color.Black,
-                            disabledContainerColor = Color(0xFF29415A)
+                            containerColor = AppleSystemBlue,
+                            contentColor = Color.White,
+                            disabledContainerColor = AppleCardSurfaceSecondary,
+                            disabledContentColor = AppleTextTertiary
                         ),
-                        modifier = Modifier.fillMaxWidth().height(52.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) {
-                        Text("Create Group", fontWeight = FontWeight.Bold)
+                        Text("Create Channel", fontWeight = FontWeight.Bold)
                     }
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(24.dp))
 
             Text(
-                text = "Join a group nearby",
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 17.sp
+                text = "NEARBY CHANNELS",
+                style = AppleCaption2,
+                modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
             )
-            Spacer(Modifier.height(10.dp))
 
             if (discovered.isEmpty()) {
-                GlassSurface(isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
+                GlassSurface(cornerRadius = 18.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
                     Row(
-                        modifier = Modifier.padding(20.dp).fillMaxWidth(),
+                        modifier = Modifier.padding(18.dp).fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         CircularProgressIndicator(
-                            color = ElectricAqua,
+                            color = AppleSystemBlue,
                             strokeWidth = 2.dp,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(Modifier.width(14.dp))
                         Text(
-                            text = "Looking for groups nearby...",
-                            color = Color(0xFFCBD5E1),
-                            fontSize = 14.sp
+                            text = "Scanning for nearby channels…",
+                            style = AppleBody,
+                            color = AppleTextSecondary
                         )
                     }
                 }
@@ -170,7 +174,7 @@ private fun DiscoveredGroupCard(
     isOutdoorMode: Boolean,
     onJoin: () -> Unit
 ) {
-    GlassSurface(isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
+    GlassSurface(cornerRadius = 16.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(16.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -178,32 +182,32 @@ private fun DiscoveredGroupCard(
             Column(Modifier.weight(1f)) {
                 Text(
                     text = group.name,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
+                    style = AppleHeadline
                 )
                 Text(
-                    text = "${group.devicesVisible} device${if (group.devicesVisible == 1) "" else "s"} nearby",
-                    color = Color(0xFF9FB3C8),
-                    fontSize = 13.sp
+                    text = "${group.devicesVisible} device${if (group.devicesVisible == 1) "" else "s"} broadcasting",
+                    style = AppleFootnote,
+                    color = AppleTextSecondary
                 )
             }
             Button(
                 onClick = onJoin,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ElectricAqua,
-                    contentColor = Color.Black
-                )
+                    containerColor = AppleSystemBlue,
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.height(36.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                Text("Join", fontWeight = FontWeight.Bold)
+                Text("Join", fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
         }
     }
 }
 
 /**
- * The group roster: who is in, who is still connecting, and what went wrong. This is the
- * screen that answers "which group am I in and who am I actually connected to".
+ * Apple-inspired Group Roster Screen.
  */
 @Composable
 fun GroupRoomScreen(
@@ -224,56 +228,48 @@ fun GroupRoomScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AtmosphericDarkBrush)
+            .background(AppleBackground)
             .safeDrawingPadding()
             .padding(16.dp)
     ) {
         Column(Modifier.fillMaxSize()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
                 }
                 Column {
                     Text(
                         text = group?.name ?: "Group",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
+                        style = AppleTitle2
                     )
                     Text(
-                        text = if (state.isCoordinator) {
-                            "You are the host"
-                        } else {
-                            "Host: ${state.coordinator?.displayName ?: "..."}"
-                        },
-                        color = ElectricAqua,
-                        fontSize = 13.sp
+                        text = if (state.isCoordinator) "You are the channel host" else "Host: ${state.coordinator?.displayName ?: "…"}",
+                        style = AppleFootnote,
+                        color = AppleSystemTeal
                     )
                 }
             }
 
             Spacer(Modifier.height(14.dp))
 
-            GlassSurface(isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(18.dp)) {
+            GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
                     Text(
                         text = "${state.liveMemberCount} of ${state.members.size} devices connected",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
+                        style = AppleHeadline
                     )
                     if (state.pending.isNotEmpty()) {
                         Text(
-                            text = "${state.pending.size} still connecting...",
-                            color = WarmAmber,
-                            fontSize = 13.sp
+                            text = "${state.pending.size} still connecting…",
+                            style = AppleFootnote,
+                            color = AppleSystemOrange
                         )
                     }
                     if (state.failed.isNotEmpty()) {
                         Text(
-                            text = "${state.failed.size} could not connect",
-                            color = RoseActive,
-                            fontSize = 13.sp
+                            text = "${state.failed.size} connection failure",
+                            style = AppleFootnote,
+                            color = AppleSystemRed
                         )
                     }
                 }
@@ -294,12 +290,11 @@ fun GroupRoomScreen(
                     Spacer(Modifier.height(8.dp))
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "To add another phone: open TalkLoop on it, tap Connect Devices, " +
-                        "then pick \"${group?.name ?: ""}\".",
-                    color = Color(0xFF7A8CA0),
-                    fontSize = 12.sp,
+                    text = "To add another phone: open TalkLoop on it, tap Connect Devices, and select \"${group?.name ?: ""}\".",
+                    style = AppleFootnote,
+                    color = AppleTextTertiary,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
                 )
@@ -311,16 +306,18 @@ fun GroupRoomScreen(
                 onClick = onStartTalking,
                 enabled = state.connected.isNotEmpty(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ElectricAqua,
-                    contentColor = Color.Black,
-                    disabledContainerColor = Color(0xFF29415A),
-                    disabledContentColor = Color(0xFF7A8CA0)
+                    containerColor = AppleSystemBlue,
+                    contentColor = Color.White,
+                    disabledContainerColor = AppleCardSurfaceSecondary,
+                    disabledContentColor = AppleTextTertiary
                 ),
-                modifier = Modifier.fillMaxWidth().height(54.dp)
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().height(50.dp)
             ) {
                 Text(
-                    text = if (state.connected.isEmpty()) "Waiting for a device..." else "Start Talking",
-                    fontWeight = FontWeight.Bold
+                    text = if (state.connected.isEmpty()) "Waiting for peers…" else "Start Talking",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
                 )
             }
 
@@ -328,10 +325,11 @@ fun GroupRoomScreen(
 
             OutlinedButton(
                 onClick = { viewModel.leaveGroup() },
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseActive),
-                modifier = Modifier.fillMaxWidth().height(48.dp)
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = AppleSystemRed),
+                modifier = Modifier.fillMaxWidth().height(46.dp)
             ) {
-                Text("Leave Group")
+                Text("Leave Channel", fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -376,21 +374,20 @@ private fun MemberRow(
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (isLocal) "${member.displayName} (you)" else member.displayName,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
+                        text = if (isLocal) "${member.displayName} (You)" else member.displayName,
+                        style = AppleHeadline,
+                        fontSize = 14.sp
                     )
                     if (member.role == GroupRole.COORDINATOR) {
                         Spacer(Modifier.width(6.dp))
                         Text(
                             text = "HOST",
-                            color = ElectricAqua,
+                            color = AppleSystemTeal,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.ExtraBold,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(ElectricAqua.copy(alpha = 0.15f))
+                                .background(AppleSystemTeal.copy(alpha = 0.15f))
                                 .padding(horizontal = 5.dp, vertical = 2.dp)
                         )
                     }
@@ -398,17 +395,12 @@ private fun MemberRow(
                 Text(
                     text = statusLabel(member, isLocal),
                     color = statusColor(member, isLocal),
-                    fontSize = 12.sp
+                    style = AppleCaption1
                 )
-                // The whole point of asking a person to accept: they must see the same
-                // code shown on the other phone before tapping it, or this is worthless.
                 if (member.state == MemberState.PENDING_APPROVAL && member.authCode != null) {
                     Text(
-                        text = "Code: ${member.authCode}",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        letterSpacing = 1.sp
+                        text = "Auth Code: ${member.authCode}",
+                        style = AppleMonospacedDigits.copy(color = Color.White, fontSize = 14.sp)
                     )
                 }
             }
@@ -416,21 +408,21 @@ private fun MemberRow(
             when {
                 member.state == MemberState.PENDING_APPROVAL -> {
                     IconButton(onClick = onAccept) {
-                        Icon(Icons.Default.Check, contentDescription = "Accept", tint = MintGreen)
+                        Icon(Icons.Default.Check, contentDescription = "Accept", tint = AppleSystemGreen)
                     }
                     IconButton(onClick = onDecline) {
-                        Icon(Icons.Default.Close, contentDescription = "Decline", tint = RoseActive)
+                        Icon(Icons.Default.Close, contentDescription = "Decline", tint = AppleSystemRed)
                     }
                 }
                 member.state == MemberState.FAILED && !isLocal -> {
                     IconButton(onClick = onRemove) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Retry", tint = WarmAmber)
+                        Icon(Icons.Default.Refresh, contentDescription = "Retry", tint = AppleSystemOrange)
                     }
                 }
                 member.state == MemberState.CONNECTING ||
                     member.state == MemberState.RECONNECTING -> {
                     CircularProgressIndicator(
-                        color = WarmAmber,
+                        color = AppleSystemOrange,
                         strokeWidth = 2.dp,
                         modifier = Modifier.size(18.dp)
                     )
@@ -444,21 +436,21 @@ private fun statusLabel(member: GroupMember, isLocal: Boolean): String = when {
     isLocal -> "This device"
     member.state == MemberState.CONNECTED && !member.isDirect -> "Connected via relay"
     member.state == MemberState.CONNECTED -> "Connected"
-    member.state == MemberState.CONNECTING -> "Connecting..."
+    member.state == MemberState.CONNECTING -> "Connecting…"
     member.state == MemberState.PENDING_APPROVAL -> "Wants to join"
-    member.state == MemberState.RECONNECTING -> "Reconnecting..."
+    member.state == MemberState.RECONNECTING -> "Reconnecting…"
     member.state == MemberState.FAILED -> member.failureReason ?: "Could not connect"
     member.state == MemberState.DISCOVERED -> "Found nearby"
-    member.state == MemberState.LEFT -> "Left the group"
+    member.state == MemberState.LEFT -> "Left channel"
     else -> ""
 }
 
 private fun statusColor(member: GroupMember, isLocal: Boolean): Color = when {
-    isLocal -> ElectricAqua
-    member.state == MemberState.CONNECTED -> MintGreen
-    member.state == MemberState.FAILED -> RoseActive
-    member.state == MemberState.PENDING_APPROVAL -> BrightCyan
+    isLocal -> AppleSystemTeal
+    member.state == MemberState.CONNECTED -> AppleSystemGreen
+    member.state == MemberState.FAILED -> AppleSystemRed
+    member.state == MemberState.PENDING_APPROVAL -> AppleSystemBlue
     member.state == MemberState.CONNECTING ||
-        member.state == MemberState.RECONNECTING -> WarmAmber
-    else -> Color(0xFF9FB3C8)
+        member.state == MemberState.RECONNECTING -> AppleSystemOrange
+    else -> AppleTextTertiary
 }

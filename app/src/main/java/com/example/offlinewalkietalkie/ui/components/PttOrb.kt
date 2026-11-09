@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -15,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
@@ -28,6 +30,11 @@ import com.example.offlinewalkietalkie.R
 import com.example.offlinewalkietalkie.protocol.FloorState
 import com.example.offlinewalkietalkie.theme.*
 
+/**
+ * Apple Design Award-grade PTT Acoustic Dial.
+ * Features tactile 0.96 scale-on-press animation, continuous concentric rings,
+ * ambient breathing pulse halo, and crisp SF-style status typography.
+ */
 @Composable
 fun PttOrb(
     floorState: FloorState,
@@ -41,75 +48,93 @@ fun PttOrb(
     val isTalking = floorState is FloorState.HeldByMe || floorState is FloorState.Talking || floorState is FloorState.Granted
     val isRequesting = floorState is FloorState.Requesting
     val isHeldByOther = floorState is FloorState.HeldByOther
-    // pointerInput(Unit) builds its gesture block once, so reading isHeldByOther directly
-    // inside it would pin the value from first composition.
     val heldByOther by rememberUpdatedState(isHeldByOther)
 
-    val infiniteTransition = rememberInfiniteTransition(label = "ptt_pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = if (isTalking) 1.08f else if (isRequesting) 1.04f else 1.01f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse_scale"
+    // Tactile 0.96 press bounce as mandated by better-ui
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.96f else 1.0f,
+        animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing),
+        label = "apple_ptt_press_bounce"
     )
 
-    val currentBrush = when {
-        isTalking -> PttTalkingBrush
-        else -> PttReadyBrush
+    // Ambient breathing aura
+    val infiniteTransition = rememberInfiniteTransition(label = "apple_ptt_pulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = if (isTalking) 1.06f else if (isRequesting) 1.03f else 1.01f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "apple_pulse_scale"
+    )
+
+    val haloColor = when {
+        isTalking -> AppleSystemRed.copy(alpha = 0.45f)
+        isHeldByOther -> AppleSystemGreen.copy(alpha = 0.45f)
+        isRequesting -> AppleSystemOrange.copy(alpha = 0.45f)
+        else -> AppleSystemBlue.copy(alpha = 0.22f)
     }
 
     val stateText = when (floorState) {
-        is FloorState.HeldByMe, is FloorState.Talking, is FloorState.Granted -> stringResource(R.string.talking)
-        is FloorState.Requesting -> stringResource(R.string.requesting_talk)
-        is FloorState.HeldByOther -> stringResource(R.string.peer_is_speaking, floorState.peerName)
-        is FloorState.Denied -> "Floor Denied"
-        is FloorState.Releasing -> "Releasing..."
-        is FloorState.Idle -> stringResource(R.string.hold_to_talk)
+        is FloorState.HeldByMe, is FloorState.Talking, is FloorState.Granted -> "Transmitting"
+        is FloorState.Requesting -> "Connecting…"
+        is FloorState.HeldByOther -> "${floorState.peerName} Speaking"
+        is FloorState.Denied -> "Channel Busy"
+        is FloorState.Releasing -> "Ending…"
+        is FloorState.Idle -> "Hold to Speak"
     }
-
-    val targetSize = if (isPressed) 184.dp else 176.dp
 
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
-            .size(200.dp)
+            .size(196.dp)
             .semantics {
-                contentDescription = "Push to Talk button. Status: $stateText. Double tap or hold to talk."
+                contentDescription = "Push to Talk button. Status: $stateText. Hold down to speak."
             }
     ) {
-        // Outer glow/pulse ring
+        // Outer breathing halo ring
         Box(
             modifier = Modifier
                 .size(192.dp)
                 .scale(pulseScale)
                 .clip(CircleShape)
                 .border(
-                    width = if (isTalking) 2.dp else 1.dp,
-                    color = if (isTalking) RoseActive.copy(alpha = 0.6f) else ElectricAqua.copy(alpha = 0.3f),
+                    width = if (isTalking || isHeldByOther) 1.5.dp else 0.75.dp,
+                    color = haloColor,
                     shape = CircleShape
                 )
         )
 
-        // Main 176dp Orb
+        // Middle acoustic bezel ring
+        Box(
+            modifier = Modifier
+                .size(180.dp)
+                .clip(CircleShape)
+                .background(AppleCardSurfaceSecondary.copy(alpha = 0.5f))
+                .border(0.5.dp, AppleGlassBorder, CircleShape)
+        )
+
+        // Core tactile 168dp interactive dial
+        val dialBrush = if (isOutdoorMode) {
+            if (isTalking) Brush.linearGradient(listOf(AppleSystemRed, AppleSystemRed))
+            else Brush.linearGradient(listOf(AppleCardSurface, AppleCardSurface))
+        } else {
+            if (isTalking) PttTalkingBrush else PttReadyBrush
+        }
+
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(targetSize)
+                .size(168.dp)
+                .scale(pressScale)
                 .clip(CircleShape)
-                .background(
-                    when {
-                        isOutdoorMode && isTalking -> RoseActive
-                        isOutdoorMode -> ElectricAqua
-                        else -> Color.Transparent
-                    }
+                .background(dialBrush)
+                .border(
+                    width = 1.dp,
+                    color = if (isTalking) AppleSystemRed.copy(alpha = 0.8f) else Color.White.copy(alpha = 0.15f),
+                    shape = CircleShape
                 )
-                .then(
-                    if (!isOutdoorMode) Modifier.background(currentBrush) else Modifier
-                )
-                .border(2.dp, Color(0x66FFFFFF), CircleShape)
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onPress = {
@@ -124,38 +149,77 @@ fun PttOrb(
                     )
                 }
         ) {
+            // Subtle specular glass lens highlight on top half
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.12f),
+                                Color.Transparent
+                            ),
+                            startY = 0f,
+                            endY = 160f
+                        )
+                    )
+            )
+
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
                 modifier = Modifier.padding(horizontal = 16.dp)
             ) {
-                // Mic Icon Badge
+                // Tactile frosted icon capsule
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .size(44.dp)
                         .clip(CircleShape)
-                        .background(Color(0x33FFFFFF))
-                        .border(1.dp, Color(0x4DFFFFFF), CircleShape)
+                        .background(
+                            if (isTalking) AppleSystemRed.copy(alpha = 0.35f)
+                            else if (isHeldByOther) AppleSystemGreen.copy(alpha = 0.35f)
+                            else Color.White.copy(alpha = 0.12f)
+                        )
+                        .border(
+                            0.75.dp,
+                            if (isTalking) AppleSystemRed.copy(alpha = 0.6f)
+                            else if (isHeldByOther) AppleSystemGreen.copy(alpha = 0.6f)
+                            else Color.White.copy(alpha = 0.2f),
+                            CircleShape
+                        )
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Mic,
+                        imageVector = if (isHeldByOther) Icons.Default.VolumeUp else Icons.Default.Mic,
                         contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(26.dp)
+                        tint = if (isTalking) Color.White else if (isHeldByOther) AppleSystemGreen else AppleSystemTeal,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
+                // Clean Apple Headline & Subheadline
                 Text(
                     text = stateText,
-                    color = Color.White,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 12.sp,
-                    letterSpacing = 0.5.sp,
+                    color = AppleTextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                    letterSpacing = (-0.2).sp,
                     textAlign = TextAlign.Center,
-                    maxLines = 2
+                    maxLines = 1
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                Text(
+                    text = if (heldByOther) "Channel Active" else "PTT Ready",
+                    color = AppleTextTertiary,
+                    fontWeight = FontWeight.Normal,
+                    fontSize = 10.sp,
+                    letterSpacing = 0.4.sp,
+                    textAlign = TextAlign.Center
                 )
             }
         }

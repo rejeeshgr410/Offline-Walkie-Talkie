@@ -1,13 +1,12 @@
 package com.example.offlinewalkietalkie.ui
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,9 +14,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,7 +38,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.content.Context
 import com.example.offlinewalkietalkie.R
 import com.example.offlinewalkietalkie.channel.TextDeliveryStatus
 import com.example.offlinewalkietalkie.protocol.FloorState
@@ -44,8 +45,11 @@ import com.example.offlinewalkietalkie.theme.*
 import com.example.offlinewalkietalkie.transport.TransportType
 import com.example.offlinewalkietalkie.ui.components.GlassSurface
 import com.example.offlinewalkietalkie.ui.components.PttOrb
-import com.example.offlinewalkietalkie.util.CapabilityManager
 import com.example.offlinewalkietalkie.util.PermissionManager
+
+// ============================================================================
+// 1. Permission Onboarding Screen (Apple Onboarding Style)
+// ============================================================================
 
 @Composable
 fun PermissionScreen(onPermissionsGranted: () -> Unit) {
@@ -60,8 +64,6 @@ fun PermissionScreen(onPermissionsGranted: () -> Unit) {
         hasRadio = PermissionManager.isRadioPermissionGranted(context)
     }
 
-    // Only advance once the radio permissions are in too. Advancing on the microphone alone
-    // drops the user into an app whose discovery silently fails with MISSING_PERMISSION.
     LaunchedEffect(hasAudio, hasRadio) {
         if (hasAudio && hasRadio) {
             onPermissionsGranted()
@@ -71,45 +73,49 @@ fun PermissionScreen(onPermissionsGranted: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AtmosphericDarkBrush)
+            .background(AppleBackground)
             .safeDrawingPadding()
-            .padding(20.dp)
+            .padding(24.dp)
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.SpaceBetween,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Header
+            // Header: Large Title & Icon Lockup
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(top = 24.dp)
+                modifier = Modifier.padding(top = 28.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(64.dp)
+                        .size(68.dp)
                         .clip(RoundedCornerShape(20.dp))
-                        .background(Brush.linearGradient(listOf(BrightCyan, MintGreen))),
+                        .background(
+                            Brush.linearGradient(
+                                listOf(AppleSystemBlue, AppleSystemTeal)
+                            )
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.Mic,
                         contentDescription = null,
-                        tint = DeepInk,
+                        tint = Color.White,
                         modifier = Modifier.size(36.dp)
                     )
                 }
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(18.dp))
                 Text(
                     text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.ExtraBold
+                    style = AppleLargeTitle,
+                    color = AppleTextPrimary
                 )
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = stringResource(R.string.app_descriptor),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = ElectricAqua.copy(alpha = 0.8f)
+                    text = "Offline Mesh Intercom • Zero Internet Required",
+                    style = AppleCallout,
+                    color = AppleTextSecondary
                 )
             }
 
@@ -120,25 +126,28 @@ fun PermissionScreen(onPermissionsGranted: () -> Unit) {
             ) {
                 PermissionItemCard(
                     title = stringResource(R.string.microphone_permission),
-                    description = stringResource(R.string.microphone_desc),
+                    description = "Transmits low-latency real-time voice over Bluetooth mesh.",
                     icon = Icons.Default.Mic,
+                    iconTint = AppleSystemBlue,
                     isGranted = hasAudio
                 )
                 PermissionItemCard(
                     title = stringResource(R.string.nearby_permission),
-                    description = stringResource(R.string.nearby_desc),
+                    description = "Discovers nearby peer devices with zero Wi-Fi or cellular setup.",
                     icon = Icons.Default.Bluetooth,
+                    iconTint = AppleSystemGreen,
                     isGranted = hasRadio
                 )
                 PermissionItemCard(
                     title = stringResource(R.string.notifications_permission),
-                    description = stringResource(R.string.notifications_desc),
+                    description = "Alerts you to incoming PTT transmissions and Emergency SOS.",
                     icon = Icons.Default.Notifications,
+                    iconTint = AppleSystemOrange,
                     isGranted = true
                 )
             }
 
-            // Action Buttons
+            // Action Buttons (Apple Verb-First)
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -151,28 +160,28 @@ fun PermissionScreen(onPermissionsGranted: () -> Unit) {
                         .fillMaxWidth()
                         .height(52.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = ElectricAqua,
-                        contentColor = DeepInk
+                        containerColor = AppleSystemBlue,
+                        contentColor = Color.White
                     ),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(14.dp)
                 ) {
                     Text(
-                        text = stringResource(R.string.grant_permissions),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
+                        text = "Continue",
+                        style = AppleHeadline,
+                        color = Color.White
                     )
                 }
 
-                // Continue button ensures app is NEVER stuck
                 OutlinedButton(
                     onClick = onPermissionsGranted,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        .height(46.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AppleTextSecondary),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AppleGlassBorder)
                 ) {
-                    Text(text = stringResource(R.string.continue_to_app))
+                    Text(text = "Skip to App", style = AppleBody, fontSize = 14.sp)
                 }
 
                 TextButton(
@@ -185,9 +194,9 @@ fun PermissionScreen(onPermissionsGranted: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = stringResource(R.string.open_settings),
-                        color = Color.White.copy(alpha = 0.6f),
-                        fontSize = 12.sp
+                        text = "Open App Settings",
+                        style = AppleFootnote,
+                        color = AppleTextTertiary
                     )
                 }
             }
@@ -200,6 +209,7 @@ private fun PermissionItemCard(
     title: String,
     description: String,
     icon: ImageVector,
+    iconTint: Color,
     isGranted: Boolean
 ) {
     GlassSurface(
@@ -207,49 +217,51 @@ private fun PermissionItemCard(
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(if (isGranted) MintGreen.copy(alpha = 0.2f) else Color(0x22FFFFFF)),
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(iconTint.copy(alpha = 0.16f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = if (isGranted) MintGreen else Color.White,
+                    tint = iconTint,
                     modifier = Modifier.size(22.dp)
                 )
             }
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    fontSize = 14.sp
+                    style = AppleHeadline,
+                    fontSize = 15.sp
                 )
                 Text(
                     text = description,
-                    color = Color(0xFFCBD5E1),
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp
+                    style = AppleFootnote,
+                    color = AppleTextSecondary
                 )
             }
             if (isGranted) {
                 Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = "Granted",
-                    tint = MintGreen,
-                    modifier = Modifier.size(20.dp)
+                    tint = AppleSystemGreen,
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }
     }
 }
+
+// ============================================================================
+// 2. Home Dashboard (Apple Control Center & Dynamic Audio Dial)
+// ============================================================================
 
 @Composable
 fun HomeScreen(
@@ -294,15 +306,15 @@ fun HomeScreen(
 
     val isSurvivalMode by viewModel.isSurvivalCodecMode.collectAsState()
     val transportTypeName = if (isSurvivalMode) {
-        "⚡ Survival Mode (1.6 kbps Codec 2)"
+        "Codec 2 • 1.6 kbps Survival Mode"
     } else {
-        "Bluetooth LE Long-Range (Vivo Coded PHY)"
+        "AMR-NB • 7.4 kbps High Clarity"
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(if (isOutdoorMode) OutdoorBackground else Color.Transparent)
+            .background(if (isOutdoorMode) OutdoorBackground else AppleBackground)
             .then(if (!isOutdoorMode) Modifier.background(AtmosphericDarkBrush) else Modifier)
             .safeDrawingPadding()
     ) {
@@ -312,7 +324,7 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp, vertical = 4.dp)
         ) {
             Column {
-                // 1. Top Bar & Lock-up
+                // 1. Apple Navigation Bar Header
                 TopHeaderBar(
                     connectedCount = connectedPeers.size,
                     isOutdoorMode = isOutdoorMode,
@@ -338,7 +350,7 @@ fun HomeScreen(
                 )
             }
 
-            // 2. Main Content - Scrollable Middle Body (responsive across all screen heights)
+            // 2. Middle Body: Scrollable Cockpit Content
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -346,7 +358,7 @@ fun HomeScreen(
                     .verticalScroll(rememberScrollState())
             ) {
                 ActiveSessionContent(
-                    channelName = if (connectedPeers.isNotEmpty()) currentChannelName else "BLE Walkie-Talkie",
+                    channelName = if (connectedPeers.isNotEmpty()) currentChannelName else "Direct Walkie-Talkie",
                     connectedPeers = connectedPeers,
                     floorState = floorState,
                     isOutdoorMode = isOutdoorMode,
@@ -373,7 +385,7 @@ fun HomeScreen(
                 )
             }
 
-            // 3. 4-Tab Bottom Navigation Bar (Always pinned & visible!)
+            // 3. Floating iOS Tab Bar (Always Pinned)
             BottomNavigationBar(
                 activeTab = 0,
                 isOutdoorMode = isOutdoorMode,
@@ -402,91 +414,96 @@ private fun TopHeaderBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Waveform Brand Mark & Titles
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Brush.linearGradient(listOf(BrightCyan, MintGreen))),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Mic,
-                    contentDescription = null,
-                    tint = DeepInk,
-                    modifier = Modifier.size(20.dp)
+        // Large Title & Subtitle Status Pill
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "TalkLoop",
+                    style = AppleLargeTitle,
+                    fontSize = 26.sp,
+                    letterSpacing = (-0.4).sp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                // Live status dot
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(if (connectedCount > 0) AppleSystemGreen else AppleSystemBlue)
                 )
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            Column {
-                Text(
-                    text = stringResource(R.string.app_name),
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 17.sp,
-                    color = Color.White
-                )
-                Text(
-                    text = stringResource(R.string.app_descriptor),
-                    fontSize = 10.sp,
-                    color = ElectricAqua.copy(alpha = 0.8f),
-                    fontWeight = FontWeight.Medium
-                )
-            }
+            Text(
+                text = if (connectedCount > 0) "$connectedCount Connected • Ready" else "Auto-Discovery Active • Offline",
+                style = AppleFootnote,
+                color = AppleTextSecondary
+            )
         }
 
         // Action Buttons: Radar, History, SOS
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Radar Icon Button
             IconButton(
                 onClick = onOpenRadar,
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(38.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.12f))
+                    .background(AppleCardSurfaceSecondary)
+                    .border(0.75.dp, AppleGlassBorder, CircleShape)
             ) {
                 Icon(
                     imageVector = Icons.Default.Navigation,
-                    contentDescription = "Radar",
-                    tint = BrightCyan,
-                    modifier = Modifier.size(18.dp)
+                    contentDescription = "Directional Radar",
+                    tint = AppleSystemBlue,
+                    modifier = Modifier.size(19.dp)
                 )
             }
 
+            // Voice History Button
             IconButton(
                 onClick = onOpenHistory,
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(38.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.12f))
+                    .background(AppleCardSurfaceSecondary)
+                    .border(0.75.dp, AppleGlassBorder, CircleShape)
             ) {
                 Icon(
                     imageVector = Icons.Default.History,
-                    contentDescription = "History",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp)
+                    contentDescription = "Voice History",
+                    tint = AppleTextPrimary,
+                    modifier = Modifier.size(19.dp)
                 )
             }
 
+            // Apple Emergency SOS Capsule
             Button(
                 onClick = onOpenSos,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isBroadcastingSos) Color(0xFFFFEB3B) else Color(0xFFD32F2F)
+                    containerColor = if (isBroadcastingSos) AppleSystemYellow else AppleSystemRed,
+                    contentColor = if (isBroadcastingSos) Color.Black else Color.White
                 ),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                modifier = Modifier.height(32.dp)
+                shape = RoundedCornerShape(17.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                modifier = Modifier
+                    .height(34.dp)
+                    .border(
+                        0.75.dp,
+                        if (isBroadcastingSos) AppleSystemYellow else Color.White.copy(alpha = 0.25f),
+                        RoundedCornerShape(17.dp)
+                    )
             ) {
                 Text(
                     text = if (isBroadcastingSos) "SOS ON" else "SOS",
-                    color = if (isBroadcastingSos) Color.Black else Color.White,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 11.sp
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    letterSpacing = 0.5.sp
                 )
             }
         }
@@ -521,6 +538,7 @@ private fun ActiveSessionContent(
     onLeaveSession: () -> Unit
 ) {
     var showMuteConfirmation by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -530,21 +548,35 @@ private fun ActiveSessionContent(
         if (showMuteConfirmation) {
             AlertDialog(
                 onDismissRequest = { showMuteConfirmation = false },
-                title = { Text("Mute live audio?") },
+                containerColor = AppleCardSurface,
+                shape = RoundedCornerShape(20.dp),
+                title = { Text("Mute Live Audio?", style = AppleTitle3) },
                 text = {
-                    Text("You won't hear peers in real time while muted. Incoming transmissions will remain available in voice history for playback.")
+                    Text(
+                        "You won't hear peers in real time while muted. Incoming voice transmissions are still recorded in Voice History.",
+                        style = AppleFootnote,
+                        color = AppleTextSecondary
+                    )
                 },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showMuteConfirmation = false
-                        onToggleMute()
-                    }) { Text("Mute") }
+                    Button(
+                        onClick = {
+                            showMuteConfirmation = false
+                            onToggleMute()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AppleSystemOrange),
+                        shape = RoundedCornerShape(10.dp)
+                    ) { Text("Mute Audio", fontWeight = FontWeight.Bold) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showMuteConfirmation = false }) { Text("Cancel") }
+                    TextButton(onClick = { showMuteConfirmation = false }) {
+                        Text("Cancel", color = AppleTextSecondary)
+                    }
                 }
             )
         }
+
+        // Live Audio Muted Banner
         if (isMuted) {
             GlassSurface(
                 cornerRadius = 16.dp,
@@ -562,38 +594,43 @@ private fun ActiveSessionContent(
                         Icon(
                             imageVector = Icons.Default.VolumeOff,
                             contentDescription = null,
-                            tint = WarmAmber,
+                            tint = AppleSystemOrange,
                             modifier = Modifier.size(20.dp)
                         )
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Live audio muted",
-                                color = WarmAmber,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
+                                text = "Live Audio Muted",
+                                style = AppleHeadline,
+                                color = AppleSystemOrange,
+                                fontSize = 13.sp
                             )
                             Text(
-                                text = "Transmissions are saved to voice history",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 11.sp
+                                text = "Transmissions saved to Voice History",
+                                style = AppleCaption1,
+                                color = AppleTextSecondary
                             )
                         }
                     }
-                    TextButton(onClick = onToggleMute) {
-                        Text(
-                            text = "Unmute",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
+                    Button(
+                        onClick = onToggleMute,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AppleCardSurfaceSecondary,
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Unmute", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
         }
-        // Current Channel Glass Card
+
+        // 1. Channel Inset Card (Apple Health/Fitness Style)
         GlassSurface(
-            cornerRadius = 26.dp,
+            cornerRadius = 22.dp,
             isOutdoorMode = isOutdoorMode,
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -606,16 +643,16 @@ private fun ActiveSessionContent(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(36.dp)
+                                .size(38.dp)
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(BrightCyan.copy(alpha = 0.2f)),
+                                .background(AppleSystemBlue.copy(alpha = 0.16f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Group,
                                 contentDescription = null,
-                                tint = BrightCyan,
-                                modifier = Modifier.size(20.dp)
+                                tint = AppleSystemBlue,
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(10.dp))
@@ -623,47 +660,42 @@ private fun ActiveSessionContent(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = if (connectedPeers.isNotEmpty()) channelName else "Direct Walkie-Talkie",
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    fontSize = 15.sp
+                                    style = AppleHeadline
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Box(
                                     modifier = Modifier
                                         .size(6.dp)
                                         .clip(CircleShape)
-                                        .background(if (connectedPeers.isNotEmpty()) ElectricAqua else WarmAmber)
+                                        .background(if (connectedPeers.isNotEmpty()) AppleSystemGreen else AppleSystemOrange)
                                 )
                             }
                             Text(
                                 text = if (connectedPeers.isNotEmpty())
-                                    "${connectedPeers.size + 1} members · Good quality"
+                                    "${connectedPeers.size + 1} devices connected • BLE Mesh"
                                 else
-                                    "Searching for peers nearby... · Auto-Discovery Active",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 11.sp
+                                    "Ready to talk • Auto-Discovery active",
+                                style = AppleFootnote,
+                                color = AppleTextSecondary
                             )
                         }
                     }
                     Icon(
                         imageVector = Icons.Default.ChevronRight,
                         contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.5f),
-                        modifier = Modifier.size(20.dp)
+                        tint = AppleTextTertiary,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Horizontal Participant Avatar Row
+                // Horizontal Participant Avatars
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // You (Active Speaker)
                     val isYouSpeaking = floorState is FloorState.HeldByMe || floorState is FloorState.Talking || floorState is FloorState.Granted
                     AvatarBadge(
                         name = "You",
@@ -674,7 +706,6 @@ private fun ActiveSessionContent(
                         batteryPercent = localBatteryPercent
                     )
 
-                    // Connected peers
                     connectedPeers.forEach { peer ->
                         val isThisPeerSpeaking = floorState is FloorState.HeldByOther && floorState.peerId == peer.id
                         val peerBatt = peerTelemetry[peer.id]?.batteryPercent
@@ -691,57 +722,57 @@ private fun ActiveSessionContent(
             }
         }
 
-        // Central Luminous PTT Section with Symmetrical Cockpit Controls
+        // 2. Central Apple Studio Acoustic Dial with Symmetrical Pods
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left Quick Pods: Audio Route & Live Audio Mute
+            // Left Quick Pods: Audio Routing & Live Mute
             Column(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 GlassSurface(
-                    cornerRadius = 16.dp,
+                    cornerRadius = 14.dp,
                     isOutdoorMode = isOutdoorMode,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clickable { onToggleSpeaker() }
+                    interactive = true,
+                    onClick = onToggleSpeaker,
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                         Icon(
                             imageVector = if (speakerphoneEnabled) Icons.Default.VolumeUp else Icons.Default.Headset,
-                            contentDescription = if (speakerphoneEnabled) stringResource(R.string.speaker) else stringResource(R.string.earpiece),
-                            tint = if (speakerphoneEnabled) ElectricAqua else Color.White,
+                            contentDescription = if (speakerphoneEnabled) "Speakerphone" else "Earpiece",
+                            tint = if (speakerphoneEnabled) AppleSystemBlue else AppleTextSecondary,
                             modifier = Modifier.size(22.dp)
                         )
                     }
                 }
 
                 GlassSurface(
-                    cornerRadius = 16.dp,
+                    cornerRadius = 14.dp,
                     isOutdoorMode = isOutdoorMode,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clickable {
-                            if (isMuted) onToggleMute() else showMuteConfirmation = true
-                        }
+                    interactive = true,
+                    onClick = {
+                        if (isMuted) onToggleMute() else showMuteConfirmation = true
+                    },
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                         Icon(
                             imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                            contentDescription = if (isMuted) "Unmute live audio" else "Mute live audio",
-                            tint = if (isMuted) WarmAmber else Color.White.copy(alpha = 0.75f),
+                            contentDescription = if (isMuted) "Unmute Audio" else "Mute Audio",
+                            tint = if (isMuted) AppleSystemOrange else AppleTextSecondary,
                             modifier = Modifier.size(22.dp)
                         )
                     }
                 }
             }
 
-            // 176dp Luminous PTT Orb (Centered)
+            // Central Tactile Acoustic PTT Dial
             PttOrb(
                 floorState = floorState,
                 isOutdoorMode = isOutdoorMode,
@@ -749,40 +780,40 @@ private fun ActiveSessionContent(
                 onPressEnd = onPttEnd
             )
 
-            // Right Quick Pods: Roster / Contacts & 1-Tap Replay Last
+            // Right Quick Pods: Contacts Roster & 1-Tap Replay Last
             Column(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 GlassSurface(
-                    cornerRadius = 16.dp,
+                    cornerRadius = 14.dp,
                     isOutdoorMode = isOutdoorMode,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clickable { onNavigateToContacts() }
+                    interactive = true,
+                    onClick = onNavigateToContacts,
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                         Icon(
                             imageVector = Icons.Default.People,
-                            contentDescription = stringResource(R.string.roster),
-                            tint = Color.White,
+                            contentDescription = "Contacts Roster",
+                            tint = AppleTextPrimary,
                             modifier = Modifier.size(22.dp)
                         )
                     }
                 }
 
                 GlassSurface(
-                    cornerRadius = 16.dp,
+                    cornerRadius = 14.dp,
                     isOutdoorMode = isOutdoorMode,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clickable { onReplayLast() }
+                    interactive = true,
+                    onClick = onReplayLast,
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                         Icon(
                             imageVector = Icons.Default.Replay,
-                            contentDescription = "Replay last audio transmission",
-                            tint = BrightCyan,
+                            contentDescription = "Replay Last Audio",
+                            tint = AppleSystemTeal,
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -790,9 +821,9 @@ private fun ActiveSessionContent(
             }
         }
 
-        // Connection Glass Strip
+        // 3. Telemetry & Codec Strip (Apple Control Center Pill)
         GlassSurface(
-            cornerRadius = 18.dp,
+            cornerRadius = 16.dp,
             isOutdoorMode = isOutdoorMode,
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -802,54 +833,52 @@ private fun ActiveSessionContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 5 Quality Signal Bars
                     QualitySignalBars()
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
                             text = if (connectedPeers.isNotEmpty())
-                                "Good quality · ${connectedPeers.size} ${if (connectedPeers.size == 1) "peer" else "peers"}"
+                                "High Quality • ${connectedPeers.size} ${if (connectedPeers.size == 1) "Peer" else "Peers"}"
                             else
-                                "Auto-Discovery Active · Ready to talk",
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
+                                "Ready to Talk • Auto-Discovery",
+                            style = AppleHeadline,
                             fontSize = 12.sp
                         )
                         Text(
                             text = transportTypeName,
-                            color = Color(0xFF94A3B8),
-                            fontSize = 10.sp
+                            style = AppleCaption1,
+                            color = AppleTextSecondary
                         )
                     }
                 }
                 Icon(
                     imageVector = Icons.Default.ChevronRight,
                     contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.4f),
-                    modifier = Modifier.size(18.dp)
+                    tint = AppleTextTertiary,
+                    modifier = Modifier.size(16.dp)
                 )
             }
         }
 
-        // 2x2 Quick-Action Glass Grid
+        // 4. Quick Action 2x2 Grid (Apple Inset Cards)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             QuickActionCard(
-                title = stringResource(R.string.nearby_devices),
-                subtitle = stringResource(R.string.searching_devices),
+                title = "Nearby Devices",
+                subtitle = "Scan & Pair",
                 icon = Icons.Default.WifiTethering,
-                iconTint = BrightCyan,
+                iconTint = AppleSystemBlue,
                 isOutdoorMode = isOutdoorMode,
                 onClick = onNavigateToNearby,
                 modifier = Modifier.weight(1f)
             )
             QuickActionCard(
-                title = stringResource(R.string.mesh_relay),
-                subtitle = if (isRelayModeActive) stringResource(R.string.mesh_active) else "Inactive",
+                title = "Mesh Relay",
+                subtitle = if (isRelayModeActive) "Active" else "Standby",
                 icon = Icons.Default.Hub,
-                iconTint = if (isRelayModeActive) MintGreen else Color.Gray,
+                iconTint = if (isRelayModeActive) AppleSystemGreen else AppleTextTertiary,
                 isOutdoorMode = isOutdoorMode,
                 onClick = onToggleRelay,
                 modifier = Modifier.weight(1f)
@@ -861,26 +890,26 @@ private fun ActiveSessionContent(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             QuickActionCard(
-                title = stringResource(R.string.security),
-                subtitle = if (securedPeerCount > 0) "Encrypted ($securedPeerCount)" else "Not Secured",
+                title = "Security",
+                subtitle = if (securedPeerCount > 0) "Encrypted ($securedPeerCount)" else "Direct Link",
                 icon = Icons.Default.Security,
-                iconTint = if (securedPeerCount > 0) Color(0xFF818CF8) else Color.Gray,
+                iconTint = if (securedPeerCount > 0) AppleSystemIndigo else AppleTextTertiary,
                 isOutdoorMode = isOutdoorMode,
                 onClick = onNavigateToPairing,
                 modifier = Modifier.weight(1f)
             )
             QuickActionCard(
-                title = stringResource(R.string.settings),
+                title = "Settings",
                 subtitle = if (speakerphoneEnabled) "Speaker On" else "Earpiece",
                 icon = Icons.Default.Settings,
-                iconTint = WarmAmber,
+                iconTint = AppleSystemOrange,
                 isOutdoorMode = isOutdoorMode,
                 onClick = onNavigateToSettings,
                 modifier = Modifier.weight(1f)
             )
         }
 
-        // Replay Last & Radar Action Buttons
+        // Secondary Action Pills
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -890,17 +919,12 @@ private fun ActiveSessionContent(
                 modifier = Modifier
                     .weight(1f)
                     .height(42.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AppleCardSurfaceSecondary)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Replay,
-                    contentDescription = null,
-                    tint = BrightCyan,
-                    modifier = Modifier.size(18.dp)
-                )
+                Icon(Icons.Default.Replay, contentDescription = null, tint = AppleSystemTeal, modifier = Modifier.size(17.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Replay Last", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                Text(text = "Replay Last", style = AppleHeadline, fontSize = 12.sp)
             }
 
             Button(
@@ -908,42 +932,41 @@ private fun ActiveSessionContent(
                 modifier = Modifier
                     .weight(1f)
                     .height(42.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AppleCardSurfaceSecondary)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Navigation,
-                    contentDescription = null,
-                    tint = MintGreen,
-                    modifier = Modifier.size(18.dp)
-                )
+                Icon(Icons.Default.Navigation, contentDescription = null, tint = AppleSystemBlue, modifier = Modifier.size(17.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Radar View", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                Text(text = "Radar View", style = AppleHeadline, fontSize = 12.sp)
             }
         }
 
-        OutlinedButton(onClick = onNavigateToDiscoverMap, modifier = Modifier.fillMaxWidth().height(40.dp)) {
-            Icon(Icons.Default.Map, contentDescription = null)
+        OutlinedButton(
+            onClick = onNavigateToDiscoverMap,
+            shape = RoundedCornerShape(12.dp),
+            border = androidx.compose.foundation.BorderStroke(0.75.dp, AppleGlassBorder),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp)
+        ) {
+            Icon(Icons.Default.Map, contentDescription = null, tint = AppleSystemBlue, modifier = Modifier.size(17.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Discover map")
+            Text("Discover Offline Map", style = AppleHeadline, fontSize = 13.sp, color = AppleTextPrimary)
         }
 
-        // Leave Session button
+        // Leave Session / Leave Channel Button
         OutlinedButton(
             onClick = onLeaveSession,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(42.dp),
-            shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444))
+            shape = RoundedCornerShape(12.dp),
+            border = androidx.compose.foundation.BorderStroke(0.75.dp, AppleSystemRed.copy(alpha = 0.4f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = AppleSystemRed)
         ) {
-            Icon(
-                imageVector = Icons.Default.ExitToApp,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp)
-            )
+            Icon(Icons.Default.ExitToApp, contentDescription = null, modifier = Modifier.size(17.dp))
             Spacer(modifier = Modifier.width(6.dp))
-            Text(text = "Leave Session", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Text(text = "Leave Channel", style = AppleHeadline, fontSize = 13.sp)
         }
     }
 }
@@ -957,11 +980,11 @@ private fun IdleDashboardContent(
     onScanNearby: () -> Unit
 ) {
     GlassSurface(
-        cornerRadius = 28.dp,
+        cornerRadius = 24.dp,
         isOutdoorMode = isOutdoorMode,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 24.dp)
+            .padding(vertical = 20.dp)
     ) {
         Column(
             modifier = Modifier.padding(24.dp),
@@ -970,68 +993,67 @@ private fun IdleDashboardContent(
         ) {
             Box(
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(60.dp)
                     .clip(CircleShape)
-                    .background(BrightCyan.copy(alpha = 0.2f)),
+                    .background(AppleSystemBlue.copy(alpha = 0.18f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.WifiFind,
                     contentDescription = null,
-                    tint = BrightCyan,
-                    modifier = Modifier.size(32.dp)
+                    tint = AppleSystemBlue,
+                    modifier = Modifier.size(30.dp)
                 )
             }
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = stringResource(R.string.no_active_session),
-                fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
-                color = Color.White
+                text = "No Active Channel",
+                style = AppleTitle2
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = stringResource(R.string.no_active_session_desc),
-                fontSize = 12.sp,
-                color = Color(0xFFCBD5E1),
-                textAlign = TextAlign.Center,
-                lineHeight = 18.sp
+                text = "Connect with nearby devices over Bluetooth LE mesh to start talking and exchanging encrypted offline messages.",
+                style = AppleFootnote,
+                color = AppleTextSecondary,
+                textAlign = TextAlign.Center
             )
-            Spacer(modifier = Modifier.height(24.dp))
-            // One way in. Creating versus joining is decided on the next screen, where
-            // the nearby groups are actually visible.
+            Spacer(modifier = Modifier.height(20.dp))
             Button(
                 onClick = onCreateChannel,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(48.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ElectricAqua,
-                    contentColor = DeepInk
+                    containerColor = AppleSystemBlue,
+                    contentColor = Color.White
                 ),
-                shape = RoundedCornerShape(14.dp)
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Text(
-                    text = stringResource(R.string.connect_devices),
-                    fontWeight = FontWeight.Bold
-                )
+                Text(text = "Connect Devices", fontWeight = FontWeight.Bold)
             }
             Spacer(modifier = Modifier.height(10.dp))
             OutlinedButton(
                 onClick = onScanNearby,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = BrightCyan)
+                    .height(44.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(0.75.dp, AppleGlassBorder)
             ) {
-                Text(text = stringResource(R.string.scan_nearby))
+                Text(text = "Scan Nearby", color = AppleTextPrimary)
             }
             Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(onClick = onOpenMap, modifier = Modifier.fillMaxWidth().height(44.dp)) {
-                Icon(Icons.Default.Map, contentDescription = null)
+            OutlinedButton(
+                onClick = onOpenMap,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(0.75.dp, AppleGlassBorder)
+            ) {
+                Icon(Icons.Default.Map, contentDescription = null, tint = AppleSystemBlue)
                 Spacer(Modifier.width(8.dp))
-                Text("Discover map")
+                Text("Discover Offline Map", color = AppleTextPrimary)
             }
         }
     }
@@ -1051,12 +1073,12 @@ private fun AvatarBadge(
         modifier = Modifier.padding(2.dp)
     ) {
         Box(contentAlignment = Alignment.Center) {
-            // Pulse ring if speaking
+            // Speaking pulse ring
             if (isSpeaking) {
                 val infiniteTransition = rememberInfiniteTransition(label = "avatar_pulse")
                 val pulseScale by infiniteTransition.animateFloat(
                     initialValue = 1f,
-                    targetValue = 1.25f,
+                    targetValue = 1.22f,
                     animationSpec = infiniteRepeatable(
                         animation = tween(1000, easing = FastOutSlowInEasing),
                         repeatMode = RepeatMode.Reverse
@@ -1065,10 +1087,10 @@ private fun AvatarBadge(
                 )
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(46.dp)
                         .scale(pulseScale)
                         .clip(CircleShape)
-                        .border(2.dp, ElectricAqua, CircleShape)
+                        .border(1.5.dp, AppleSystemGreen, CircleShape)
                 )
             }
 
@@ -1077,50 +1099,48 @@ private fun AvatarBadge(
                 modifier = Modifier
                     .size(42.dp)
                     .clip(CircleShape)
-                    .background(if (isRelay) Color(0xFF3B2F1E) else Color(0xFF1E293B))
+                    .background(if (isRelay) AppleCardSurfaceTertiary else AppleCardSurfaceSecondary)
                     .border(
-                        1.5.dp,
-                        if (isRelay) WarmAmber else if (isSpeaking) ElectricAqua else Color(0x33FFFFFF),
+                        1.dp,
+                        if (isRelay) AppleSystemOrange else if (isSpeaking) AppleSystemGreen else AppleGlassBorder,
                         CircleShape
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = initials,
-                    fontWeight = FontWeight.Bold,
+                    style = AppleHeadline,
                     fontSize = 13.sp,
-                    color = if (isRelay) WarmAmber else Color.White
+                    color = if (isRelay) AppleSystemOrange else Color.White
                 )
             }
 
-            // Status badge indicator
+            // Status indicator dot
             Box(
                 modifier = Modifier
                     .size(10.dp)
                     .align(Alignment.BottomEnd)
                     .clip(CircleShape)
-                    .background(if (isRelay) WarmAmber else if (isOnline) MintGreen else Color.Gray)
-                    .border(1.5.dp, DeepInk, CircleShape)
+                    .background(if (isRelay) AppleSystemOrange else if (isOnline) AppleSystemGreen else AppleTextTertiary)
+                    .border(1.5.dp, AppleBackground, CircleShape)
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = name,
-            fontSize = 10.sp,
-            color = if (isSpeaking) ElectricAqua else Color(0xFFCBD5E1),
+            style = AppleCaption1,
+            color = if (isSpeaking) AppleSystemGreen else AppleTextSecondary,
             fontWeight = if (isSpeaking) FontWeight.Bold else FontWeight.Normal
         )
         if (batteryPercent != null && batteryPercent in 0..100) {
             val battColor = when {
-                batteryPercent > 50 -> MintGreen
-                batteryPercent > 20 -> Color.Yellow
-                else -> Color(0xFFEF5350)
+                batteryPercent > 50 -> AppleSystemGreen
+                batteryPercent > 20 -> AppleSystemOrange
+                else -> AppleSystemRed
             }
             Text(
-                text = "🔋$batteryPercent%",
-                fontSize = 9.sp,
-                color = battColor,
-                fontWeight = FontWeight.Bold
+                text = "$batteryPercent%",
+                style = AppleMonospacedDigits.copy(fontSize = 10.sp, color = battColor)
             )
         }
     }
@@ -1130,14 +1150,14 @@ private fun AvatarBadge(
 private fun QualitySignalBars() {
     Row(
         verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-        modifier = Modifier.height(16.dp)
+        horizontalArrangement = Arrangement.spacedBy(2.5.dp),
+        modifier = Modifier.height(14.dp)
     ) {
-        Box(modifier = Modifier.width(3.dp).height(6.dp).clip(RoundedCornerShape(1.dp)).background(ElectricAqua))
-        Box(modifier = Modifier.width(3.dp).height(9.dp).clip(RoundedCornerShape(1.dp)).background(ElectricAqua))
-        Box(modifier = Modifier.width(3.dp).height(12.dp).clip(RoundedCornerShape(1.dp)).background(ElectricAqua))
-        Box(modifier = Modifier.width(3.dp).height(15.dp).clip(RoundedCornerShape(1.dp)).background(ElectricAqua))
-        Box(modifier = Modifier.width(3.dp).height(16.dp).clip(RoundedCornerShape(1.dp)).background(Color.White.copy(alpha = 0.2f)))
+        Box(modifier = Modifier.width(3.dp).height(5.dp).clip(RoundedCornerShape(1.dp)).background(AppleSystemBlue))
+        Box(modifier = Modifier.width(3.dp).height(8.dp).clip(RoundedCornerShape(1.dp)).background(AppleSystemBlue))
+        Box(modifier = Modifier.width(3.dp).height(11.dp).clip(RoundedCornerShape(1.dp)).background(AppleSystemBlue))
+        Box(modifier = Modifier.width(3.dp).height(14.dp).clip(RoundedCornerShape(1.dp)).background(AppleSystemBlue))
+        Box(modifier = Modifier.width(3.dp).height(14.dp).clip(RoundedCornerShape(1.dp)).background(AppleTextQuaternary))
     }
 }
 
@@ -1154,21 +1174,21 @@ private fun QuickActionCard(
     GlassSurface(
         cornerRadius = 18.dp,
         isOutdoorMode = isOutdoorMode,
-        modifier = modifier
-            .height(68.dp)
-            .clickable { onClick() }
+        interactive = true,
+        onClick = onClick,
+        modifier = modifier.height(72.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(38.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(iconTint.copy(alpha = 0.2f)),
+                    .background(iconTint.copy(alpha = 0.16f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -1182,14 +1202,14 @@ private fun QuickActionCard(
             Column {
                 Text(
                     text = title,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = Color.White
+                    style = AppleHeadline,
+                    fontSize = 13.sp
                 )
                 Text(
                     text = subtitle,
-                    fontSize = 10.sp,
-                    color = Color(0xFF94A3B8)
+                    style = AppleFootnote,
+                    color = AppleTextSecondary,
+                    fontSize = 11.sp
                 )
             }
         }
@@ -1203,24 +1223,24 @@ private fun BottomNavigationBar(
     onSelectTab: (Int) -> Unit
 ) {
     GlassSurface(
-        cornerRadius = 24.dp,
+        cornerRadius = 28.dp,
         isOutdoorMode = isOutdoorMode,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
             val tabs: List<Pair<String, ImageVector>> = listOf(
-                Pair(stringResource(R.string.home), Icons.Default.Home),
-                Pair(stringResource(R.string.messages), Icons.Default.ChatBubbleOutline),
-                Pair(stringResource(R.string.contacts), Icons.Default.Contacts),
-                Pair(stringResource(R.string.more), Icons.Default.MoreHoriz)
+                Pair("Walkie", Icons.Default.Radio),
+                Pair("Messages", Icons.Default.ChatBubbleOutline),
+                Pair("Contacts", Icons.Default.PeopleOutline),
+                Pair("Settings", Icons.Default.Settings)
             )
 
             tabs.forEachIndexed { index, pair ->
@@ -1228,28 +1248,31 @@ private fun BottomNavigationBar(
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(14.dp))
                         .clickable { onSelectTab(index) }
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .padding(horizontal = 14.dp, vertical = 4.dp)
                 ) {
                     Icon(
                         imageVector = pair.second,
                         contentDescription = pair.first,
-                        tint = if (isSelected) ElectricAqua else Color(0xFF94A3B8),
+                        tint = if (isSelected) AppleSystemBlue else AppleTextTertiary,
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = pair.first,
-                        fontSize = 10.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (isSelected) ElectricAqua else Color(0xFF94A3B8)
+                        style = if (isSelected) AppleHeadline.copy(fontSize = 10.sp) else AppleFootnote.copy(fontSize = 10.sp),
+                        color = if (isSelected) AppleSystemBlue else AppleTextTertiary
                     )
                 }
             }
         }
     }
 }
+
+// ============================================================================
+// 3. Nearby Devices Screen (Apple AirDrop / Find My Style)
+// ============================================================================
 
 @Composable
 fun NearbyDevicesScreen(
@@ -1281,17 +1304,6 @@ fun NearbyDevicesScreen(
         }
     }
 
-    LaunchedEffect(isWifiEnabled, peers) {
-        if (!isWifiEnabled && peers.isEmpty()) {
-            kotlinx.coroutines.delay(15_000)
-            if (!isWifiEnabled && peers.isEmpty()) {
-                showFallbackBanner = true
-            }
-        } else {
-            showFallbackBanner = false
-        }
-    }
-
     LaunchedEffect(pendingRequest) {
         if (pendingRequest != null) {
             onNavigateToPairing()
@@ -1301,7 +1313,7 @@ fun NearbyDevicesScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AtmosphericDarkBrush)
+            .background(AppleBackground)
             .safeDrawingPadding()
             .padding(16.dp)
     ) {
@@ -1311,142 +1323,68 @@ fun NearbyDevicesScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
                 }
-                Text(
-                    text = stringResource(R.string.nearby_devices),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
-                )
+                Column {
+                    Text(
+                        text = "Nearby Devices",
+                        style = AppleTitle2
+                    )
+                    Text(
+                        text = "AirDrop-style local Bluetooth discovery",
+                        style = AppleFootnote,
+                        color = AppleTextSecondary
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            if (!isWifiEnabled) {
-                GlassSurface(
-                    cornerRadius = 12.dp,
-                    isOutdoorMode = isOutdoorMode,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.WifiOff,
-                            contentDescription = null,
-                            tint = Color(0xFFFFB45C),
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Wi-Fi radio is off",
-                                color = Color(0xFFFFB45C),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
-                            Text(
-                                text = "Turn on Wi-Fi for faster discovery. No internet needed.",
-                                color = Color(0xFF94A3B8),
-                                fontSize = 11.sp
-                            )
-                        }
-                        TextButton(onClick = {
-                            context.startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS))
-                        }) {
-                            Text("Open", color = ElectricAqua, fontSize = 12.sp)
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            if (showFallbackBanner && transportType == TransportType.NEARBY_CONNECTIONS) {
-                GlassSurface(
-                    cornerRadius = 12.dp,
-                    isOutdoorMode = isOutdoorMode,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.BluetoothSearching,
-                            contentDescription = null,
-                            tint = ElectricAqua,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "No devices found",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
-                            Text(
-                                text = "Try Bluetooth-only mode?",
-                                color = Color(0xFF94A3B8),
-                                fontSize = 11.sp
-                            )
-                        }
-                        TextButton(onClick = {
-                            viewModel.switchToBleTransport()
-                            showFallbackBanner = false
-                        }) {
-                            Text("Switch", color = ElectricAqua, fontSize = 12.sp)
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
+            // Discoverability Info Card
             GlassSurface(
-                cornerRadius = 16.dp,
+                cornerRadius = 20.dp,
                 isOutdoorMode = isOutdoorMode,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         text = "Visible as \"${viewModel.localDeviceName}\"",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
+                        style = AppleHeadline
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = buildString {
-                            append(if (isAdvertising) "Discoverable" else "Not discoverable")
-                            append(" · ")
-                            append(if (isDiscovering) "Scanning" else "Not scanning")
-                            if (transportType != TransportType.NEARBY_CONNECTIONS) {
-                                append(" · ")
-                                append(transportType.name.replace("_", " "))
-                            }
+                            append(if (isAdvertising) "Discoverable" else "Not Discoverable")
+                            append(" • ")
+                            append(if (isDiscovering) "Scanning" else "Idle")
                         },
-                        color = if (isAdvertising && isDiscovering) MintGreen else Color(0xFFFFB45C),
-                        fontSize = 11.sp
+                        style = AppleFootnote,
+                        color = if (isAdvertising && isDiscovering) AppleSystemGreen else AppleSystemOrange
                     )
                     Text(
-                        text = "Open this screen on both phones.",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 11.sp
+                        text = "Keep this screen open on both devices to establish an offline link.",
+                        style = AppleCaption1,
+                        color = AppleTextTertiary,
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                     if (transportError != null) {
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = transportError!!,
-                            color = Color(0xFFFF5E77),
-                            fontSize = 11.sp
+                            color = AppleSystemRed,
+                            style = AppleFootnote
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "DISCOVERED PEERS (${peers.size})",
+                style = AppleCaption2,
+                modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+            )
 
             if (peers.isEmpty()) {
                 Box(
@@ -1456,99 +1394,86 @@ fun NearbyDevicesScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = ElectricAqua)
+                        CircularProgressIndicator(color = AppleSystemBlue, strokeWidth = 2.5.dp, modifier = Modifier.size(36.dp))
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = stringResource(R.string.searching_devices),
-                            color = Color(0xFFCBD5E1)
+                            text = "Searching for Nearby Devices…",
+                            style = AppleHeadline,
+                            color = AppleTextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Ensure TalkLoop is running on the other phone.",
+                            style = AppleFootnote,
+                            color = AppleTextTertiary
                         )
                     }
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
-                    items(peers) { peer ->
+                    items(peers, key = { it.id }) { peer ->
                         GlassSurface(
                             cornerRadius = 16.dp,
                             isOutdoorMode = isOutdoorMode,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.padding(14.dp).fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(CircleShape)
-                                            .background(ElectricAqua.copy(alpha = 0.2f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = peer.name.take(2).uppercase(),
-                                            color = ElectricAqua,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                text = peer.name,
-                                                fontWeight = FontWeight.Bold,
-                                                color = Color.White,
-                                                fontSize = 14.sp
-                                            )
-                                            val batt = peerTelemetry[peer.id]?.batteryPercent
-                                            if (batt != null && batt in 0..100) {
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                val battColor = when {
-                                                    batt > 50 -> MintGreen
-                                                    batt > 20 -> Color.Yellow
-                                                    else -> Color(0xFFEF5350)
-                                                }
-                                                Text(
-                                                    text = "🔋$batt%",
-                                                    fontSize = 10.sp,
-                                                    color = battColor,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                        }
-                                        Text(
-                                            text = "ID: ${peer.id.take(8)}",
-                                            color = Color(0xFF94A3B8),
-                                            fontSize = 11.sp
-                                        )
-                                    }
+                                Box(
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(CircleShape)
+                                        .background(AppleCardSurfaceSecondary),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Smartphone,
+                                        contentDescription = null,
+                                        tint = AppleSystemBlue,
+                                        modifier = Modifier.size(22.dp)
+                                    )
                                 }
 
-                                if (peer.isConnected) {
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = stringResource(R.string.connected),
-                                        color = MintGreen,
-                                        fontWeight = FontWeight.Bold
+                                        text = peer.name,
+                                        style = AppleHeadline
                                     )
-                                } else {
-                                    Button(
-                                        onClick = { viewModel.connectToPeer(peer.id) },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = ElectricAqua,
-                                            contentColor = DeepInk
-                                        ),
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) {
-                                        Text(
-                                            text = stringResource(R.string.connect),
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
+                                    Text(
+                                        text = if (peer.isConnected) "Connected • Link Active" else "Nearby • Tap Connect",
+                                        style = AppleFootnote,
+                                        color = if (peer.isConnected) AppleSystemGreen else AppleTextSecondary
+                                    )
+                                }
+
+                                Button(
+                                    onClick = {
+                                        if (peer.isConnected) {
+                                            viewModel.disconnectPeer(peer.id)
+                                        } else {
+                                            viewModel.connectToPeer(peer.id)
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (peer.isConnected) AppleCardSurfaceSecondary else AppleSystemBlue,
+                                        contentColor = if (peer.isConnected) AppleSystemRed else Color.White
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(34.dp)
+                                ) {
+                                    Text(
+                                        text = if (peer.isConnected) "Disconnect" else "Connect",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
                                 }
                             }
                         }
@@ -1559,22 +1484,22 @@ fun NearbyDevicesScreen(
     }
 }
 
+// ============================================================================
+// 4. Pairing & Verification Screen (Apple Security Modal)
+// ============================================================================
+
 @Composable
 fun PairingScreen(
     viewModel: WalkieTalkieViewModel,
     onPaired: () -> Unit,
     onBack: () -> Unit
 ) {
-    // State, not an event stream: this screen is mounted in response to the request, so a
-    // replay-less flow would hand it nothing and leave it waiting forever.
     val request by viewModel.pendingRequest.collectAsState()
     val isOutdoorMode by viewModel.isOutdoorMode.collectAsState()
     val isInSession by viewModel.isInSession.collectAsState()
     var accepted by remember { mutableStateOf(false) }
     var dismissed by remember { mutableStateOf(false) }
 
-    // Accepting is only half a handshake; the link is live when the peer accepts too.
-    // Guarded so a recomposition cannot pop a second entry off the back stack.
     LaunchedEffect(isInSession) {
         if (isInSession && !dismissed) {
             dismissed = true
@@ -1585,7 +1510,7 @@ fun PairingScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AtmosphericDarkBrush)
+            .background(AppleBackground)
             .safeDrawingPadding()
             .padding(20.dp)
     ) {
@@ -1599,13 +1524,11 @@ fun PairingScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
                 }
                 Text(
-                    text = stringResource(R.string.verify_identity),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    text = "Verify Identity",
+                    style = AppleTitle2
                 )
             }
 
@@ -1619,37 +1542,50 @@ fun PairingScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     if (request == null) {
-                        CircularProgressIndicator(color = ElectricAqua)
-                        Spacer(modifier = Modifier.height(16.dp))
+                        CircularProgressIndicator(color = AppleSystemBlue, strokeWidth = 2.5.dp)
+                        Spacer(modifier = Modifier.height(18.dp))
                         Text(
                             text = if (accepted) {
-                                "Confirmed. Waiting for the other phone to confirm the same code…"
+                                "Confirmed. Waiting for the partner phone to confirm match…"
                             } else {
-                                stringResource(R.string.waiting_request)
+                                "Waiting for incoming connection request…"
                             },
-                            color = Color(0xFFCBD5E1),
+                            style = AppleBody,
+                            color = AppleTextSecondary,
                             textAlign = TextAlign.Center
                         )
                     } else {
                         Text(
-                            text = stringResource(R.string.pairing_with, request!!.peerName),
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            fontSize = 16.sp
+                            text = "Pairing with ${request!!.peerName}",
+                            style = AppleHeadline,
+                            fontSize = 17.sp
                         )
                         Spacer(modifier = Modifier.height(16.dp))
+
+                        // Giant Monospaced 6-digit Code (Apple Style)
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(AppleCardSurfaceSecondary)
+                                .border(0.75.dp, AppleGlassBorder, RoundedCornerShape(16.dp))
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                        ) {
+                            Text(
+                                text = request!!.authCode,
+                                style = AppleLargeTitle.copy(
+                                    color = AppleSystemBlue,
+                                    fontSize = 36.sp,
+                                    letterSpacing = 6.sp,
+                                    fontFeatureSettings = "tnum"
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
                         Text(
-                            text = request!!.authCode,
-                            color = ElectricAqua,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 36.sp,
-                            letterSpacing = 4.sp
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "Compare the 6 digits with your partner's screen. If they match, tap Confirm.",
-                            color = Color(0xFFCBD5E1),
-                            fontSize = 12.sp,
+                            text = "Compare the 6 digits with your partner's screen. If they match, tap Confirm Match.",
+                            style = AppleFootnote,
+                            color = AppleTextSecondary,
                             textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(24.dp))
@@ -1659,8 +1595,6 @@ fun PairingScreen(
                         ) {
                             Button(
                                 onClick = {
-                                    // Navigation happens when the link actually comes up,
-                                    // not on the local tap alone.
                                     accepted = true
                                     viewModel.acceptConnection(request!!.peerId)
                                 },
@@ -1668,14 +1602,15 @@ fun PairingScreen(
                                     .weight(1f)
                                     .height(48.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = ElectricAqua,
-                                    contentColor = DeepInk
+                                    containerColor = AppleSystemBlue,
+                                    contentColor = Color.White
                                 ),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Text(
-                                    text = stringResource(R.string.confirm_match),
-                                    fontWeight = FontWeight.Bold
+                                    text = "Confirm Match",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
                                 )
                             }
                             OutlinedButton(
@@ -1687,9 +1622,10 @@ fun PairingScreen(
                                     .weight(1f)
                                     .height(48.dp),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseActive)
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = AppleSystemRed),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, AppleSystemRed.copy(alpha = 0.5f))
                             ) {
-                                Text(text = stringResource(R.string.reject))
+                                Text(text = "Reject", fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -1700,6 +1636,10 @@ fun PairingScreen(
         }
     }
 }
+
+// ============================================================================
+// 5. Settings Screen (Apple iOS Settings Grouped Lists)
+// ============================================================================
 
 @Composable
 fun SettingsScreen(
@@ -1713,338 +1653,490 @@ fun SettingsScreen(
     val allowIncomingRequests by viewModel.allowIncomingRequests.collectAsState()
     var loopbackEnabled by remember { mutableStateOf(false) }
 
+    val isSurvivalMode by viewModel.isSurvivalCodecMode.collectAsState()
+    val isFloatingActive by viewModel.isFloatingPttActive.collectAsState()
+    val isVolumePtt by viewModel.isVolumeKeyPttEnabled.collectAsState()
+    val isScoActive by viewModel.isBluetoothScoActive.collectAsState()
+    val context = LocalContext.current
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AtmosphericDarkBrush)
+            .background(AppleBackground)
             .safeDrawingPadding()
             .padding(16.dp)
     ) {
-        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
                 }
                 Text(
-                    text = stringResource(R.string.settings),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    text = "Settings",
+                    style = AppleLargeTitle,
+                    fontSize = 28.sp
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Intercom Controls & Policy", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { viewModel.setAllowIncomingRequests(!allowIncomingRequests) }
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Allow incoming requests", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                            Text(if (allowIncomingRequests) "New devices wait for your approval" else "Incoming requests are rejected", color = Color(0xFFCBD5E1), fontSize = 12.sp)
-                        }
-                        Switch(checked = allowIncomingRequests, onCheckedChange = viewModel::setAllowIncomingRequests)
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { viewModel.setDisturbanceMode(!disturbanceMode) }
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Disturbance mode", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                            Text("Keep SOS alerts visible but silence their audible siren", color = Color(0xFFCBD5E1), fontSize = 12.sp)
-                        }
-                        Switch(checked = disturbanceMode, onCheckedChange = viewModel::setDisturbanceMode)
-                    }
-                    Button(
-                        onClick = { viewModel.markTextMessagesRead() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().height(42.dp)
-                    ) {
-                        Text("Mark Received Messages Read", fontSize = 12.sp, color = Color.White)
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(14.dp))
-            // Offline Maps Hub Card
-            GlassSurface(
-                cornerRadius = 18.dp,
-                isOutdoorMode = isOutdoorMode,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenOfflineMaps() }
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
+            // GROUP 1: AUDIO & RANGE
+            Column {
+                Text(
+                    text = "AUDIO & CODEC",
+                    style = AppleCaption2,
+                    modifier = Modifier.padding(start = 14.dp, bottom = 6.dp)
+                )
+                GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // Survival Mode Toggle
+                        Row(
                             modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(BrightCyan.copy(alpha = 0.2f)),
-                            contentAlignment = Alignment.Center
+                                .fillMaxWidth()
+                                .clickable { viewModel.toggleSurvivalCodecMode() }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Map, contentDescription = null, tint = BrightCyan, modifier = Modifier.size(22.dp))
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text("Offline Maps Manager", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            Text("Download & preview local OSM vector road networks", color = Color(0xFFCBD5E1), fontSize = 12.sp)
-                        }
-                    }
-                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-
-            GlassSurface(
-                cornerRadius = 20.dp,
-                isOutdoorMode = isOutdoorMode,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    // Outdoor mode toggle
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = stringResource(R.string.outdoor_mode),
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "High-contrast opaque surfaces for sunlight",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 11.sp
-                            )
-                        }
-                        Switch(
-                            checked = isOutdoorMode,
-                            onCheckedChange = { viewModel.toggleOutdoorMode() }
-                        )
-                    }
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
-
-                    // Survival / Extreme Range Mode (Codec 2 1.6 kbps)
-                    val isSurvivalMode by viewModel.isSurvivalCodecMode.collectAsState()
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { viewModel.toggleSurvivalCodecMode() }
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "Survival / Extreme Range Mode",
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isSurvivalMode) RoseActive else Color.White
-                                )
-                                if (isSurvivalMode) {
-                                    Spacer(modifier = Modifier.width(6.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AppleSystemOrange.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Bolt, null, tint = AppleSystemOrange, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Survival Range Mode", style = AppleHeadline, fontSize = 14.sp)
+                                        if (isSurvivalMode) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                "1.6 kbps",
+                                                style = AppleMonospacedDigits.copy(fontSize = 9.sp, color = Color.Black),
+                                                modifier = Modifier
+                                                    .background(AppleSystemOrange, RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
                                     Text(
-                                        text = "1.6 kbps",
-                                        color = DeepInk,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier
-                                            .background(RoseActive, RoundedCornerShape(4.dp))
-                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                        if (isSurvivalMode) "Codec 2 active: 8-byte micro-frames for extreme RF penetration"
+                                        else "AMR-NB active: Natural voice clarity. Switch for weak signals.",
+                                        style = AppleFootnote,
+                                        color = AppleTextSecondary
                                     )
                                 }
                             }
-                            Text(
-                                text = if (isSurvivalMode)
-                                    "Codec 2 active: 8-byte micro-frames for maximum RF penetration & long-range survival links"
-                                else
-                                    "AMR-NB active: 8 kHz natural voice clarity. Enable Codec 2 for extreme range & weak signal",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 11.sp
+                            Switch(
+                                checked = isSurvivalMode,
+                                onCheckedChange = { viewModel.setSurvivalCodecMode(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AppleSystemGreen
+                                )
                             )
                         }
-                        Switch(
-                            checked = isSurvivalMode,
-                            onCheckedChange = { viewModel.setSurvivalCodecMode(it) }
-                        )
-                    }
 
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
+                        HorizontalDivider(color = AppleGlassBorder)
 
-                    // Audio Loopback Test
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = stringResource(R.string.test_audio_loopback),
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "Hear your own microphone locally",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 11.sp
-                            )
-                        }
-                        Switch(
-                            checked = loopbackEnabled,
-                            onCheckedChange = {
-                                loopbackEnabled = it
-                                viewModel.setLoopbackMode(it)
-                            }
-                        )
-                    }
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
-
-                    // Speakerphone vs Earpiece
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Audio Routing",
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = if (speakerphoneEnabled) "Speakerphone active" else "Earpiece active",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 11.sp
-                            )
-                        }
-                        Switch(
-                            checked = speakerphoneEnabled,
-                            onCheckedChange = { viewModel.toggleAudioRoute() }
-                        )
-                    }
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
-
-                    // Floating PTT Bubble (SYSTEM_ALERT_WINDOW)
-                    val isFloatingActive by viewModel.isFloatingPttActive.collectAsState()
-                    val context = LocalContext.current
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Floating PTT Orb",
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "Movable talk button over Maps & camera",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 11.sp
-                            )
-                        }
-                        Switch(
-                            checked = isFloatingActive,
-                            onCheckedChange = { enable ->
-                                if (enable) {
-                                    val success = viewModel.startFloatingPtt()
-                                    if (!success) {
-                                        val intent = Intent(
-                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:${context.packageName}")
-                                        )
-                                        context.startActivity(intent)
-                                    }
-                                } else {
-                                    viewModel.stopFloatingPtt()
+                        // Speakerphone vs Earpiece
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.toggleAudioRoute() }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AppleSystemBlue.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.VolumeUp, null, tint = AppleSystemBlue, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text("Speakerphone", style = AppleHeadline, fontSize = 14.sp)
+                                    Text(if (speakerphoneEnabled) "Speaker active" else "Earpiece active", style = AppleFootnote, color = AppleTextSecondary)
                                 }
                             }
-                        )
-                    }
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
-
-                    // Pocket Mode: Hardware Volume Key PTT
-                    val isVolumePtt by viewModel.isVolumeKeyPttEnabled.collectAsState()
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Pocket Volume Key PTT",
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "Hold Volume Down while TalkLoop is on screen",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 11.sp
+                            Switch(
+                                checked = speakerphoneEnabled,
+                                onCheckedChange = { viewModel.toggleAudioRoute() },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AppleSystemGreen
+                                )
                             )
                         }
-                        Switch(
-                            checked = isVolumePtt,
-                            onCheckedChange = { viewModel.setVolumeKeyPttEnabled(it) }
-                        )
-                    }
 
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
+                        HorizontalDivider(color = AppleGlassBorder)
 
-                    // Bluetooth SCO Headset
-                    val isScoActive by viewModel.isBluetoothScoActive.collectAsState()
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Bluetooth SCO Headset",
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "Route microphone and voice to Bluetooth headset",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 11.sp
+                        // Bluetooth SCO Headset
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.toggleBluetoothSco() }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AppleSystemIndigo.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Headphones, null, tint = AppleSystemIndigo, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text("Bluetooth Headset", style = AppleHeadline, fontSize = 14.sp)
+                                    Text("Route voice to paired Bluetooth accessories", style = AppleFootnote, color = AppleTextSecondary)
+                                }
+                            }
+                            Switch(
+                                checked = isScoActive,
+                                onCheckedChange = { viewModel.toggleBluetoothSco() },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AppleSystemGreen
+                                )
                             )
                         }
-                        Switch(
-                            checked = isScoActive,
-                            onCheckedChange = { viewModel.toggleBluetoothSco() }
-                        )
+
+                        HorizontalDivider(color = AppleGlassBorder)
+
+                        // Loopback Test
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AppleSystemTeal.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Hearing, null, tint = AppleSystemTeal, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text("Microphone Loopback", style = AppleHeadline, fontSize = 14.sp)
+                                    Text("Echo microphone locally to test audio", style = AppleFootnote, color = AppleTextSecondary)
+                                }
+                            }
+                            Switch(
+                                checked = loopbackEnabled,
+                                onCheckedChange = {
+                                    loopbackEnabled = it
+                                    viewModel.setLoopbackMode(it)
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AppleSystemGreen
+                                )
+                            )
+                        }
                     }
                 }
             }
+
+            // GROUP 2: MAPS & VECTOR TILES
+            Column {
+                Text(
+                    text = "MAPS & TILES",
+                    style = AppleCaption2,
+                    modifier = Modifier.padding(start = 14.dp, bottom = 6.dp)
+                )
+                GlassSurface(
+                    cornerRadius = 20.dp,
+                    isOutdoorMode = isOutdoorMode,
+                    interactive = true,
+                    onClick = onOpenOfflineMaps,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(AppleSystemGreen.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Map, null, tint = AppleSystemGreen, modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column {
+                                Text("Offline Vector Maps", style = AppleHeadline, fontSize = 14.sp)
+                                Text("Pre-bundled OSM road packs & search grids", style = AppleFootnote, color = AppleTextSecondary)
+                            }
+                        }
+                        Icon(Icons.Default.ChevronRight, null, tint = AppleTextTertiary, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+
+            // GROUP 3: CONTROLS & SYSTEM
+            Column {
+                Text(
+                    text = "CONTROLS & OVERLAYS",
+                    style = AppleCaption2,
+                    modifier = Modifier.padding(start = 14.dp, bottom = 6.dp)
+                )
+                GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // Floating PTT Orb
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AppleSystemPink.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.FlipToFront, null, tint = AppleSystemPink, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text("Floating PTT Orb", style = AppleHeadline, fontSize = 14.sp)
+                                    Text("Movable talk button over Maps and Camera", style = AppleFootnote, color = AppleTextSecondary)
+                                }
+                            }
+                            Switch(
+                                checked = isFloatingActive,
+                                onCheckedChange = { enable ->
+                                    if (enable) {
+                                        val success = viewModel.startFloatingPtt()
+                                        if (!success) {
+                                            val intent = Intent(
+                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                Uri.parse("package:${context.packageName}")
+                                            )
+                                            context.startActivity(intent)
+                                        }
+                                    } else {
+                                        viewModel.stopFloatingPtt()
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AppleSystemGreen
+                                )
+                            )
+                        }
+
+                        HorizontalDivider(color = AppleGlassBorder)
+
+                        // Hardware Volume Key PTT
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.setVolumeKeyPttEnabled(!isVolumePtt) }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AppleSystemYellow.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Smartphone, null, tint = AppleSystemYellow, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text("Pocket Volume Key PTT", style = AppleHeadline, fontSize = 14.sp)
+                                    Text("Hold Volume Down while TalkLoop is on screen", style = AppleFootnote, color = AppleTextSecondary)
+                                }
+                            }
+                            Switch(
+                                checked = isVolumePtt,
+                                onCheckedChange = { viewModel.setVolumeKeyPttEnabled(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AppleSystemGreen
+                                )
+                            )
+                        }
+
+                        HorizontalDivider(color = AppleGlassBorder)
+
+                        // Outdoor Mode
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.toggleOutdoorMode() }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AppleSystemBlue.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.WbSunny, null, tint = AppleSystemBlue, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text("Outdoor Sunlight Mode", style = AppleHeadline, fontSize = 14.sp)
+                                    Text("High-contrast opaque surfaces for direct sun", style = AppleFootnote, color = AppleTextSecondary)
+                                }
+                            }
+                            Switch(
+                                checked = isOutdoorMode,
+                                onCheckedChange = { viewModel.toggleOutdoorMode() },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AppleSystemGreen
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+            // GROUP 4: POLICY & MESSAGES
+            Column {
+                Text(
+                    text = "POLICY & PRIVACY",
+                    style = AppleCaption2,
+                    modifier = Modifier.padding(start = 14.dp, bottom = 6.dp)
+                )
+                GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.setAllowIncomingRequests(!allowIncomingRequests) }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AppleSystemPurple.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.PersonAdd, null, tint = AppleSystemPurple, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text("Allow Incoming Requests", style = AppleHeadline, fontSize = 14.sp)
+                                    Text(if (allowIncomingRequests) "New devices prompt for verification" else "Incoming connections rejected", style = AppleFootnote, color = AppleTextSecondary)
+                                }
+                            }
+                            Switch(
+                                checked = allowIncomingRequests,
+                                onCheckedChange = viewModel::setAllowIncomingRequests,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AppleSystemGreen
+                                )
+                            )
+                        }
+
+                        HorizontalDivider(color = AppleGlassBorder)
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.setDisturbanceMode(!disturbanceMode) }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AppleSystemRed.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.NotificationsOff, null, tint = AppleSystemRed, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text("Disturbance Mode", style = AppleHeadline, fontSize = 14.sp)
+                                    Text("Keep SOS banners visible while silencing audio siren", style = AppleFootnote, color = AppleTextSecondary)
+                                }
+                            }
+                            Switch(
+                                checked = disturbanceMode,
+                                onCheckedChange = viewModel::setDisturbanceMode,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AppleSystemGreen
+                                )
+                            )
+                        }
+
+                        HorizontalDivider(color = AppleGlassBorder)
+
+                        Button(
+                            onClick = { viewModel.markTextMessagesRead() },
+                            colors = ButtonDefaults.buttonColors(containerColor = AppleCardSurfaceSecondary, contentColor = AppleTextPrimary),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().height(42.dp)
+                        ) {
+                            Text("Mark Received Messages Read", style = AppleHeadline, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
         }
     }
 }
+
+// ============================================================================
+// 6. Contacts Screen (Apple iOS Contacts Style)
+// ============================================================================
 
 @Composable
 fun ContactsScreen(
@@ -2058,7 +2150,7 @@ fun ContactsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AtmosphericDarkBrush)
+            .background(AppleBackground)
             .safeDrawingPadding()
             .padding(16.dp)
     ) {
@@ -2068,17 +2160,16 @@ fun ContactsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
                 }
                 Text(
-                    text = stringResource(R.string.contacts),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    text = "Contacts",
+                    style = AppleLargeTitle,
+                    fontSize = 28.sp
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             GlassSurface(
                 cornerRadius = 20.dp,
@@ -2087,59 +2178,70 @@ fun ContactsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Trusted Off-Grid Contacts",
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        fontSize = 15.sp
+                        text = "TRUSTED OFF-GRID PEERS",
+                        style = AppleCaption2
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Verified peers with stored cryptographic keys. Connections reconnect automatically.",
-                        color = Color(0xFFCBD5E1),
-                        fontSize = 11.sp
+                        text = "Verified peers with exchanged cryptographic keys. Reconnects automatically.",
+                        style = AppleFootnote,
+                        color = AppleTextSecondary
                     )
                     Spacer(modifier = Modifier.height(16.dp))
 
                     if (peers.isEmpty()) {
                         Text(
-                            text = "No saved contacts yet. Pair with nearby devices to verify keys.",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 12.sp
+                            text = "No saved contacts yet. Pair with nearby devices to exchange verified keys.",
+                            style = AppleFootnote,
+                            color = AppleTextTertiary,
+                            modifier = Modifier.padding(vertical = 8.dp)
                         )
                     } else {
-                        peers.forEach { peer ->
+                        peers.forEachIndexed { idx, peer ->
+                            if (idx > 0) HorizontalDivider(color = AppleGlassBorder, modifier = Modifier.padding(vertical = 8.dp))
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 8.dp),
+                                    .padding(vertical = 4.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(text = peer.name, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(CircleShape)
+                                            .background(AppleCardSurfaceSecondary),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = peer.name.take(2).uppercase(),
+                                            style = AppleHeadline,
+                                            fontSize = 13.sp,
+                                            color = Color.White
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(text = peer.name, style = AppleHeadline, fontSize = 14.sp)
+                                        Text(text = if (peer.isConnected) "Online • In Range" else "Offline", style = AppleCaption1, color = if (peer.isConnected) AppleSystemGreen else AppleTextTertiary)
+                                    }
+                                }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     val batt = peerTelemetry[peer.id]?.batteryPercent
                                     if (batt != null && batt in 0..100) {
-                                        val battColor = when {
-                                            batt > 50 -> MintGreen
-                                            batt > 20 -> Color.Yellow
-                                            else -> Color(0xFFEF5350)
-                                        }
                                         Text(
-                                            text = "🔋$batt%",
-                                            fontSize = 11.sp,
-                                            color = battColor,
-                                            fontWeight = FontWeight.Bold
+                                            text = "$batt%",
+                                            style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleSystemGreen)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                     }
                                     Icon(
                                         imageVector = Icons.Default.Verified,
-                                        contentDescription = "Verified",
-                                        tint = MintGreen,
+                                        contentDescription = "Verified Key",
+                                        tint = AppleSystemGreen,
                                         modifier = Modifier.size(16.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(text = "Verified", color = MintGreen, fontSize = 11.sp)
                                 }
                             }
                         }
@@ -2149,6 +2251,10 @@ fun ContactsScreen(
         }
     }
 }
+
+// ============================================================================
+// 7. Messages Screen (Apple iMessage Style)
+// ============================================================================
 
 @Composable
 fun MessagesScreen(
@@ -2168,7 +2274,7 @@ fun MessagesScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AtmosphericDarkBrush)
+            .background(AppleBackground)
             .safeDrawingPadding()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -2179,13 +2285,12 @@ fun MessagesScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
                 }
                 Text(
-                    text = stringResource(R.string.messages),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    text = "Messages",
+                    style = AppleLargeTitle,
+                    fontSize = 28.sp
                 )
             }
 
@@ -2198,10 +2303,10 @@ fun MessagesScreen(
                         .padding(horizontal = 16.dp)
                 ) {
                     Text(
-                        text = "No active session. Connect to a peer to exchange encrypted off-grid messages.",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(14.dp)
+                        text = "No active channel. Connect to a peer device to exchange encrypted off-grid text messages.",
+                        style = AppleFootnote,
+                        color = AppleTextSecondary,
+                        modifier = Modifier.padding(16.dp)
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
@@ -2214,23 +2319,30 @@ fun MessagesScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.Default.ChatBubbleOutline,
-                                contentDescription = null,
-                                tint = BrightCyan,
-                                modifier = Modifier.size(44.dp)
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                                    .background(AppleSystemBlue.copy(alpha = 0.18f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ChatBubbleOutline,
+                                    contentDescription = null,
+                                    tint = AppleSystemBlue,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(14.dp))
                             Text(
-                                text = "No messages yet.",
-                                color = Color(0xFF94A3B8),
-                                fontSize = 14.sp
+                                text = "No Messages Yet",
+                                style = AppleHeadline
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Send a message to your connected peer.",
-                                color = Color(0xFF94A3B8),
-                                fontSize = 12.sp
+                                text = "Send encrypted text messages to your connected peers.",
+                                style = AppleFootnote,
+                                color = AppleTextTertiary
                             )
                         }
                     }
@@ -2250,50 +2362,60 @@ fun MessagesScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start
                             ) {
-                                GlassSurface(
-                                    cornerRadius = 16.dp,
-                                    isOutdoorMode = isOutdoorMode,
-                                    modifier = Modifier.fillMaxWidth(0.75f)
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.78f)
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .background(if (isMine) AppleSystemBlue else AppleCardSurfaceSecondary)
+                                        .padding(horizontal = 14.dp, vertical = 10.dp)
                                 ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
+                                    Column {
                                         Text(
                                             text = if (isMine) "You" else msg.senderName,
-                                            color = if (isMine) BrightCyan else ElectricAqua,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold
+                                            style = AppleCaption1,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isMine) Color.White.copy(alpha = 0.8f) else AppleSystemTeal
                                         )
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Text(
                                             text = msg.content,
-                                            color = Color.White,
-                                            fontSize = 14.sp
+                                            style = AppleBody,
+                                            color = Color.White
                                         )
                                         Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = when (msg.status) {
-                                                TextDeliveryStatus.SENDING -> "Sending…"
-                                                TextDeliveryStatus.DELIVERED -> "Delivered"
-                                                TextDeliveryStatus.FAILED -> "Failed"
-                                            } + if (!isMine && !msg.isRead) " · Unread" else "",
-                                            color = if (msg.status == TextDeliveryStatus.FAILED)
-                                                RoseActive else Color(0xFF94A3B8),
-                                            fontSize = 10.sp
-                                        )
-                                        Box(Modifier.align(Alignment.End)) {
-                                            TextButton(onClick = { actionsExpanded = true }) { Text("Actions", fontSize = 10.sp) }
-                                            DropdownMenu(expanded = actionsExpanded, onDismissRequest = { actionsExpanded = false }) {
-                                                if (!isMine && !msg.isRead) DropdownMenuItem(
-                                                    text = { Text("Mark read") },
-                                                    onClick = { actionsExpanded = false; viewModel.markTextMessageRead(msg.messageId) }
-                                                )
-                                                if (isMine && msg.status == TextDeliveryStatus.FAILED) DropdownMenuItem(
-                                                    text = { Text("Resend") },
-                                                    onClick = { actionsExpanded = false; viewModel.resendTextMessage(msg.messageId) }
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text("Delete") },
-                                                    onClick = { actionsExpanded = false; viewModel.deleteTextMessage(msg.messageId) }
-                                                )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = when (msg.status) {
+                                                    TextDeliveryStatus.SENDING -> "Sending…"
+                                                    TextDeliveryStatus.DELIVERED -> "Delivered"
+                                                    TextDeliveryStatus.FAILED -> "Failed"
+                                                } + if (!isMine && !msg.isRead) " • Unread" else "",
+                                                style = AppleCaption1,
+                                                color = if (msg.status == TextDeliveryStatus.FAILED) AppleSystemRed else Color.White.copy(alpha = 0.6f)
+                                            )
+                                            Box {
+                                                TextButton(
+                                                    onClick = { actionsExpanded = true },
+                                                    contentPadding = PaddingValues(0.dp)
+                                                ) { Text("•••", fontSize = 12.sp, color = Color.White.copy(alpha = 0.7f)) }
+                                                DropdownMenu(expanded = actionsExpanded, onDismissRequest = { actionsExpanded = false }) {
+                                                    if (!isMine && !msg.isRead) DropdownMenuItem(
+                                                        text = { Text("Mark read") },
+                                                        onClick = { actionsExpanded = false; viewModel.markTextMessageRead(msg.messageId) }
+                                                    )
+                                                    if (isMine && msg.status == TextDeliveryStatus.FAILED) DropdownMenuItem(
+                                                        text = { Text("Resend") },
+                                                        onClick = { actionsExpanded = false; viewModel.resendTextMessage(msg.messageId) }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Delete") },
+                                                        onClick = { actionsExpanded = false; viewModel.deleteTextMessage(msg.messageId) }
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -2303,29 +2425,30 @@ fun MessagesScreen(
                     }
                 }
 
+                // Apple iMessage Input Capsule
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedTextField(
                         value = draft,
                         onValueChange = { draft = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("Message", color = Color(0xFF94A3B8)) },
+                        placeholder = { Text("iMessage • Offline", style = AppleFootnote, color = AppleTextTertiary) },
                         singleLine = true,
-                        shape = RoundedCornerShape(24.dp),
-                        textStyle = LocalTextStyle.current.copy(color = Color.White),
+                        shape = RoundedCornerShape(22.dp),
+                        textStyle = AppleBody,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = ElectricAqua,
-                            unfocusedBorderColor = Color(0xFF334155),
-                            focusedContainerColor = Color(0xFF16233B),
-                            unfocusedContainerColor = Color(0xFF16233B),
-                            cursorColor = BrightCyan
+                            focusedBorderColor = AppleSystemBlue,
+                            unfocusedBorderColor = AppleGlassBorder,
+                            focusedContainerColor = AppleCardSurfaceSecondary,
+                            unfocusedContainerColor = AppleCardSurfaceSecondary,
+                            cursorColor = AppleSystemBlue
                         )
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
                     Button(
                         onClick = {
                             if (draft.isNotBlank()) {
@@ -2335,19 +2458,26 @@ fun MessagesScreen(
                         },
                         enabled = draft.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = ElectricAqua,
-                            contentColor = DeepInk
+                            containerColor = AppleSystemBlue,
+                            contentColor = Color.White,
+                            disabledContainerColor = AppleCardSurfaceSecondary,
+                            disabledContentColor = AppleTextTertiary
                         ),
                         shape = CircleShape,
-                        modifier = Modifier.size(52.dp)
+                        modifier = Modifier.size(46.dp),
+                        contentPadding = PaddingValues(0.dp)
                     ) {
-                        Icon(Icons.Default.Send, contentDescription = "Send", tint = DeepInk)
+                        Icon(Icons.Default.ArrowUpward, contentDescription = "Send", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                 }
             }
         }
     }
 }
+
+// ============================================================================
+// 8. Create & Join Channel Screens (Apple Card Styling)
+// ============================================================================
 
 @Composable
 fun CreateChannelScreen(
@@ -2361,7 +2491,7 @@ fun CreateChannelScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AtmosphericDarkBrush)
+            .background(AppleBackground)
             .safeDrawingPadding()
             .padding(16.dp)
     ) {
@@ -2371,57 +2501,54 @@ fun CreateChannelScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
                 }
                 Text(
                     text = "Create Channel",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    style = AppleTitle2
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             GlassSurface(
-                cornerRadius = 16.dp,
+                cornerRadius = 20.dp,
                 isOutdoorMode = isOutdoorMode,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(18.dp)) {
                     Text(
-                        text = "Channel Name",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
+                        text = "CHANNEL NAME",
+                        style = AppleCaption2
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = channelName,
                         onValueChange = { channelName = it },
-                        placeholder = { Text("e.g. Field Ops Alpha") },
+                        placeholder = { Text("e.g. Field Operations Alpha", style = AppleFootnote) },
                         singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White,
-                            focusedBorderColor = ElectricAqua,
-                            unfocusedBorderColor = Color(0xFF475569),
-                            cursorColor = ElectricAqua,
-                            focusedPlaceholderColor = Color(0xFF64748B),
-                            unfocusedPlaceholderColor = Color(0xFF64748B)
+                            focusedBorderColor = AppleSystemBlue,
+                            unfocusedBorderColor = AppleGlassBorder,
+                            focusedContainerColor = AppleCardSurfaceSecondary,
+                            unfocusedContainerColor = AppleCardSurfaceSecondary,
+                            cursorColor = AppleSystemBlue
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "You'll host this channel. Other devices can join by scanning nearby or entering a code.",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 12.sp
+                        text = "You will host this talk channel. Nearby devices can scan and join directly.",
+                        style = AppleFootnote,
+                        color = AppleTextSecondary
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             Button(
                 onClick = {
@@ -2431,17 +2558,17 @@ fun CreateChannelScreen(
                     onNavigateToNearby()
                 },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ElectricAqua,
-                    contentColor = DeepInk
+                    containerColor = AppleSystemBlue,
+                    contentColor = Color.White
                 ),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
+                    .height(50.dp)
             ) {
                 Icon(Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Create & Start Advertising", fontWeight = FontWeight.Bold)
+                Text("Create & Broadcast Channel", fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -2459,7 +2586,7 @@ fun JoinChannelScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AtmosphericDarkBrush)
+            .background(AppleBackground)
             .safeDrawingPadding()
             .padding(16.dp)
     ) {
@@ -2469,52 +2596,49 @@ fun JoinChannelScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
                 }
                 Text(
                     text = "Join Channel",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    style = AppleTitle2
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             GlassSurface(
-                cornerRadius = 16.dp,
+                cornerRadius = 20.dp,
                 isOutdoorMode = isOutdoorMode,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(18.dp)) {
                     Text(
-                        text = "Enter Short Code",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
+                        text = "CHANNEL SHORT CODE",
+                        style = AppleCaption2
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = shortCode,
                         onValueChange = { shortCode = it.uppercase().take(6) },
-                        placeholder = { Text("6-character code") },
+                        placeholder = { Text("6-character code", style = AppleFootnote) },
                         singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White,
-                            focusedBorderColor = ElectricAqua,
-                            unfocusedBorderColor = Color(0xFF475569),
-                            cursorColor = ElectricAqua,
-                            focusedPlaceholderColor = Color(0xFF64748B),
-                            unfocusedPlaceholderColor = Color(0xFF64748B)
+                            focusedBorderColor = AppleSystemBlue,
+                            unfocusedBorderColor = AppleGlassBorder,
+                            focusedContainerColor = AppleCardSurfaceSecondary,
+                            unfocusedContainerColor = AppleCardSurfaceSecondary,
+                            cursorColor = AppleSystemBlue
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Ask the host for the 6-character channel code, or scan nearby to find open channels.",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 12.sp
+                        text = "Ask the host for the 6-character code, or scan nearby to discover open channels.",
+                        style = AppleFootnote,
+                        color = AppleTextSecondary
                     )
                 }
             }
@@ -2528,13 +2652,13 @@ fun JoinChannelScreen(
                     onNavigateToNearby()
                 },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ElectricAqua,
-                    contentColor = DeepInk
+                    containerColor = AppleSystemBlue,
+                    contentColor = Color.White
                 ),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
+                    .height(50.dp)
             ) {
                 Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
@@ -2548,15 +2672,15 @@ fun JoinChannelScreen(
                     viewModel.startNearby()
                     onNavigateToNearby()
                 },
-                border = androidx.compose.foundation.BorderStroke(1.dp, ElectricAqua),
-                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, AppleGlassBorder),
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
+                    .height(48.dp)
             ) {
-                Icon(Icons.Default.Search, contentDescription = null, tint = ElectricAqua, modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.Search, contentDescription = null, tint = AppleSystemBlue, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Scan Nearby Instead", color = ElectricAqua, fontWeight = FontWeight.Bold)
+                Text("Scan Nearby Instead", color = AppleTextPrimary, fontWeight = FontWeight.SemiBold)
             }
         }
     }

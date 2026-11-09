@@ -2,7 +2,6 @@ package com.example.offlinewalkietalkie.theme
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
@@ -10,35 +9,37 @@ import androidx.compose.ui.graphics.Color
 
 val LocalOutdoorMode = compositionLocalOf { false }
 
-private val LiquidGlassDarkColorScheme = darkColorScheme(
-    primary = ElectricAqua,
-    onPrimary = DeepInk,
-    primaryContainer = SlateBlue,
-    onPrimaryContainer = MistLight,
-    secondary = MintGreen,
-    onSecondary = DeepInk,
-    secondaryContainer = Color(0xFF14729C),
-    onSecondaryContainer = MistLight,
-    tertiary = BrightCyan,
-    onTertiary = DeepInk,
-    background = DeepInk,
-    onBackground = MistLight,
-    surface = Color(0xFF121B2B),
-    onSurface = MistLight,
-    surfaceVariant = Color(0xFF1A273B),
-    onSurfaceVariant = Color(0xFFCBD5E1),
-    error = RoseActive,
+// Apple Dark Mode Color Scheme
+private val AppleDarkColorScheme = darkColorScheme(
+    primary = AppleSystemBlue,
+    onPrimary = Color.White,
+    primaryContainer = AppleCardSurfaceSecondary,
+    onPrimaryContainer = AppleTextPrimary,
+    secondary = AppleSystemGreen,
+    onSecondary = Color.Black,
+    secondaryContainer = AppleCardSurfaceTertiary,
+    onSecondaryContainer = AppleTextPrimary,
+    tertiary = AppleSystemTeal,
+    onTertiary = Color.Black,
+    background = AppleBackground,
+    onBackground = AppleTextPrimary,
+    surface = AppleCardSurface,
+    onSurface = AppleTextPrimary,
+    surfaceVariant = AppleCardSurfaceSecondary,
+    onSurfaceVariant = AppleTextSecondary,
+    error = AppleSystemRed,
     onError = Color.White
 )
 
-private val OutdoorHighContrastColorScheme = darkColorScheme(
-    primary = ElectricAqua,
+// Apple Outdoor High-Contrast Mode
+private val AppleOutdoorColorScheme = darkColorScheme(
+    primary = AppleSystemBlue,
     onPrimary = Color.Black,
     primaryContainer = OutdoorCardBackground,
     onPrimaryContainer = Color.White,
-    secondary = MintGreen,
+    secondary = AppleSystemGreen,
     onSecondary = Color.Black,
-    tertiary = WarmAmber,
+    tertiary = AppleSystemOrange,
     onTertiary = Color.Black,
     background = OutdoorBackground,
     onBackground = Color.White,
@@ -46,7 +47,7 @@ private val OutdoorHighContrastColorScheme = darkColorScheme(
     onSurface = Color.White,
     surfaceVariant = OutdoorCardBorder,
     onSurfaceVariant = Color.White,
-    error = RoseActive,
+    error = AppleSystemRed,
     onError = Color.White
 )
 
@@ -55,7 +56,7 @@ fun OfflineWalkieTalkieTheme(
     outdoorMode: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (outdoorMode) OutdoorHighContrastColorScheme else LiquidGlassDarkColorScheme
+    val colorScheme = if (outdoorMode) AppleOutdoorColorScheme else AppleDarkColorScheme
 
     CompositionLocalProvider(LocalOutdoorMode provides outdoorMode) {
         MaterialTheme(

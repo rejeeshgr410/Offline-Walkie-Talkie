@@ -909,6 +909,15 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch { transport.connect(peerId) }
     }
 
+    fun disconnectPeer(peerId: String) {
+        Log.i(TAG, "User tapped disconnect -> $peerId")
+        viewModelScope.launch {
+            cryptoManager.removeSession(peerId)
+            securedPeerIds.remove(peerId)
+            transport.disconnect(peerId)
+        }
+    }
+
     fun acceptConnection(peerId: String) {
         viewModelScope.launch {
             transport.acceptConnection(peerId)
