@@ -311,8 +311,7 @@ fun HomeScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 16.dp, vertical = 4.dp)
         ) {
             Column {
                 // 1. Top Bar & Lock-up
@@ -341,10 +340,15 @@ fun HomeScreen(
                 )
             }
 
-            // 2. Main Content (Active Session vs Idle)
-            if (isInSession) {
+            // 2. Main Content - Scrollable Middle Body (responsive across all screen heights)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
                 ActiveSessionContent(
-                    channelName = currentChannelName,
+                    channelName = if (connectedPeers.isNotEmpty()) currentChannelName else "BLE Walkie-Talkie",
                     connectedPeers = connectedPeers,
                     floorState = floorState,
                     isOutdoorMode = isOutdoorMode,
@@ -352,7 +356,7 @@ fun HomeScreen(
                     isMuted = isMuted,
                     isRelayModeActive = isRelayModeActive,
                     securedPeerCount = securedPeerCount,
-                    transportTypeName = transportTypeName,
+                    transportTypeName = "Bluetooth LE Long-Range (Vivo Coded PHY)",
                     peerTelemetry = peerTelemetry,
                     localBatteryPercent = localBatteryPercent,
                     onToggleSpeaker = { viewModel.toggleAudioRoute() },
@@ -369,20 +373,9 @@ fun HomeScreen(
                     onNavigateToContacts = onNavigateToContacts,
                     onLeaveSession = { viewModel.leaveGroup() }
                 )
-            } else {
-                IdleDashboardContent(
-                    isOutdoorMode = isOutdoorMode,
-                    onCreateChannel = { onNavigateToCreateChannel() },
-                    onJoinChannel = { onNavigateToJoinChannel() },
-                    onOpenMap = onNavigateToDiscoverMap,
-                    onScanNearby = {
-                        viewModel.startNearby()
-                        onNavigateToNearby()
-                    }
-                )
             }
 
-            // 3. 4-Tab Bottom Navigation Bar
+            // 3. 4-Tab Bottom Navigation Bar (Always pinned & visible!)
             BottomNavigationBar(
                 activeTab = 0,
                 isOutdoorMode = isOutdoorMode,
@@ -631,7 +624,7 @@ private fun ActiveSessionContent(
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = channelName,
+                                    text = if (connectedPeers.isNotEmpty()) channelName else "Direct Walkie-Talkie",
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White,
                                     fontSize = 15.sp
@@ -641,11 +634,14 @@ private fun ActiveSessionContent(
                                     modifier = Modifier
                                         .size(6.dp)
                                         .clip(CircleShape)
-                                        .background(ElectricAqua)
+                                        .background(if (connectedPeers.isNotEmpty()) ElectricAqua else WarmAmber)
                                 )
                             }
                             Text(
-                                text = "${connectedPeers.size + 1} members · ${stringResource(R.string.good_quality)}",
+                                text = if (connectedPeers.isNotEmpty())
+                                    "${connectedPeers.size + 1} members · Good quality"
+                                else
+                                    "Searching for peers nearby... · Auto-Discovery Active",
                                 color = Color(0xFFCBD5E1),
                                 fontSize = 11.sp
                             )
@@ -813,7 +809,10 @@ private fun ActiveSessionContent(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "${stringResource(R.string.good_quality)} · ${connectedPeers.size} ${if (connectedPeers.size == 1) "peer" else "peers"}",
+                            text = if (connectedPeers.isNotEmpty())
+                                "Good quality · ${connectedPeers.size} ${if (connectedPeers.size == 1) "peer" else "peers"}"
+                            else
+                                "Auto-Discovery Active · Ready to talk",
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
                             fontSize = 12.sp
