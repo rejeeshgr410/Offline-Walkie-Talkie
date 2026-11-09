@@ -13,13 +13,13 @@ import java.util.concurrent.ConcurrentHashMap
  * and AudioRouteManager (audio focus & speakerphone routing).
  */
 class VoiceEngine(
-    private val codec: AudioCodec = OpusCodec(),
+    private var codec: AudioCodec = AmrNbCodec(),
     context: Context? = null
 ) {
     private val TAG = "TL/Voice"
     val routeManager: AudioRouteManager? = context?.let { AudioRouteManager(it) }
 
-    val sampleRate: Int = if (codec is AmrNbCodec) codec.sampleRate else AudioCapture.SAMPLE_RATE
+    val sampleRate: Int = if (codec is AmrNbCodec || codec is Codec2AudioCodec) 8000 else AudioCapture.SAMPLE_RATE
     private val capture = AudioCapture(sampleRate = sampleRate)
     private val playback = AudioPlayback(sampleRate = sampleRate)
     
@@ -128,6 +128,14 @@ class VoiceEngine(
         }
     }
     
+    fun setSurvivalCodecMode(enabled: Boolean) {
+        codec = if (enabled) Codec2AudioCodec() else AmrNbCodec()
+        jitterBuffers.clear()
+        Log.i(TAG, "Switched voice codec: ${codec::class.simpleName} (survivalMode=$enabled)")
+    }
+
+    fun isSurvivalCodecActive(): Boolean = codec is Codec2AudioCodec
+
     fun handleIncomingFrame(
         peerId: String,
         sequence: Int,
@@ -136,7 +144,8 @@ class VoiceEngine(
     ) {
         startPlayback()
         val jb = jitterBuffers.getOrPut(peerId) { 
-            JitterBuffer(if (codec is AmrNbCodec) AmrNbCodec() else OpusCodec()) 
+            val decoder = if (encodedOpus.size <= 8) Codec2AudioCodec() else AmrNbCodec()
+            JitterBuffer(decoder) 
         }
         jb.push(sequence, encodedOpus, senderTimestampMs)
     }

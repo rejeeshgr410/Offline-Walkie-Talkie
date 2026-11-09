@@ -9,6 +9,7 @@ plugins {
 android {
     namespace = "com.example.offlinewalkietalkie"
     compileSdk = 36
+    ndkVersion = "27.1.12297006"
     
     // Signing secrets live in keystore.properties (gitignored), never in this file.
     val keystoreProps = Properties().apply {
@@ -35,6 +36,22 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags += "-std=c++17"
+            }
+        }
+        ndk {
+            abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildTypes {

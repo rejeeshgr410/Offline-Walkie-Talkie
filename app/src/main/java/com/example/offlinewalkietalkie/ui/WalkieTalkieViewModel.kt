@@ -135,6 +135,9 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     private val _isOutdoorMode = MutableStateFlow(false)
     val isOutdoorMode = _isOutdoorMode.asStateFlow()
 
+    private val _isSurvivalCodecMode = MutableStateFlow(false)
+    val isSurvivalCodecMode = _isSurvivalCodecMode.asStateFlow()
+
     private val _isRelayModeActive = MutableStateFlow(true)
     val isRelayModeActive = _isRelayModeActive.asStateFlow()
 
@@ -962,6 +965,10 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         offlineMapProgressBytes.value?.let { _offlineMapProgressBytes.value = null }
     }
 
+    fun restoreBundledMapPacks() {
+        _offlineMapAreas.value = offlineMapRepository.restoreBundledPacks()
+    }
+
     fun deleteOfflineMap(area: OfflineMapArea) {
         offlineMapRepository.delete(area)
         _offlineMapAreas.value = offlineMapRepository.list()
@@ -1033,6 +1040,17 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     fun toggleOutdoorMode() {
         _isOutdoorMode.value = !_isOutdoorMode.value
+    }
+
+    fun toggleSurvivalCodecMode() {
+        val next = !_isSurvivalCodecMode.value
+        _isSurvivalCodecMode.value = next
+        voiceEngine.setSurvivalCodecMode(next)
+    }
+
+    fun setSurvivalCodecMode(enabled: Boolean) {
+        _isSurvivalCodecMode.value = enabled
+        voiceEngine.setSurvivalCodecMode(enabled)
     }
 
     fun toggleRelayMode() {

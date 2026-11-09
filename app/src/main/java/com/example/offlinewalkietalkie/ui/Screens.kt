@@ -292,13 +292,11 @@ fun HomeScreen(
         )
     }
 
-    val transportTypeName = when (transportType) {
-        com.example.offlinewalkietalkie.transport.TransportType.BLE_GATT -> "BLE Long-Range (Coded PHY)"
-        com.example.offlinewalkietalkie.transport.TransportType.NEARBY_CONNECTIONS -> "Nearby Connections"
-        com.example.offlinewalkietalkie.transport.TransportType.BLE_L2CAP -> "BLE L2CAP"
-        com.example.offlinewalkietalkie.transport.TransportType.WIFI_AWARE -> "Wi-Fi Aware"
-        com.example.offlinewalkietalkie.transport.TransportType.WIFI_DIRECT -> "Wi-Fi Direct"
-        else -> "Bluetooth"
+    val isSurvivalMode by viewModel.isSurvivalCodecMode.collectAsState()
+    val transportTypeName = if (isSurvivalMode) {
+        "⚡ Survival Mode (1.6 kbps Codec 2)"
+    } else {
+        "Bluetooth LE Long-Range (Vivo Coded PHY)"
     }
 
     Box(
@@ -356,7 +354,7 @@ fun HomeScreen(
                     isMuted = isMuted,
                     isRelayModeActive = isRelayModeActive,
                     securedPeerCount = securedPeerCount,
-                    transportTypeName = "Bluetooth LE Long-Range (Vivo Coded PHY)",
+                    transportTypeName = transportTypeName,
                     peerTelemetry = peerTelemetry,
                     localBatteryPercent = localBatteryPercent,
                     onToggleSpeaker = { viewModel.toggleAudioRoute() },
@@ -1843,6 +1841,53 @@ fun SettingsScreen(
                         Switch(
                             checked = isOutdoorMode,
                             onCheckedChange = { viewModel.toggleOutdoorMode() }
+                        )
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
+
+                    // Survival / Extreme Range Mode (Codec 2 1.6 kbps)
+                    val isSurvivalMode by viewModel.isSurvivalCodecMode.collectAsState()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.toggleSurvivalCodecMode() }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Survival / Extreme Range Mode",
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSurvivalMode) RoseActive else Color.White
+                                )
+                                if (isSurvivalMode) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "1.6 kbps",
+                                        color = DeepInk,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier
+                                            .background(RoseActive, RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = if (isSurvivalMode)
+                                    "Codec 2 active: 8-byte micro-frames for maximum RF penetration & long-range survival links"
+                                else
+                                    "AMR-NB active: 8 kHz natural voice clarity. Enable Codec 2 for extreme range & weak signal",
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 11.sp
+                            )
+                        }
+                        Switch(
+                            checked = isSurvivalMode,
+                            onCheckedChange = { viewModel.setSurvivalCodecMode(it) }
                         )
                     }
 

@@ -11,9 +11,46 @@ data class OfflineMapArea(val id: String, val name: String, val latitude: Double
 data class OfflineMapPoint(val latitude: Double, val longitude: Double)
 
 /** Downloads a bounded road extract from OpenStreetMap's Overpass API for offline reference. */
-class OfflineMapRepository(context: Context) {
+class OfflineMapRepository(private val context: Context) {
     private val directory = File(context.filesDir, "offline-map-areas").apply { mkdirs() }
     @Volatile private var activeConnection: HttpURLConnection? = null
+
+    init {
+        unpackBundledPacksIfNeeded()
+    }
+
+    private fun unpackBundledPacksIfNeeded() {
+        runCatching {
+            val assetManager = context.assets
+            val assetFiles = assetManager.list("offline-maps") ?: emptyArray()
+            for (assetName in assetFiles) {
+                val targetFile = File(directory, assetName)
+                if (!targetFile.exists()) {
+                    assetManager.open("offline-maps/$assetName").use { input ->
+                        targetFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun restoreBundledPacks(): List<OfflineMapArea> {
+        runCatching {
+            val assetManager = context.assets
+            val assetFiles = assetManager.list("offline-maps") ?: emptyArray()
+            for (assetName in assetFiles) {
+                val targetFile = File(directory, assetName)
+                assetManager.open("offline-maps/$assetName").use { input ->
+                    targetFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+        }
+        return list()
+    }
 
     fun list(): List<OfflineMapArea> = directory.listFiles { f -> f.extension == "json" }
         ?.mapNotNull { file -> runCatching { readArea(file) }.getOrNull() }

@@ -227,7 +227,18 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                         }
                     }
                 }
-                item { Text("Saved areas (${areas.size})", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp)) }
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Saved Vector Map Packs (${areas.size})", color = Color.White, fontWeight = FontWeight.Bold)
+                        TextButton(onClick = { viewModel.restoreBundledMapPacks() }) {
+                            Text("Unpack Starter Packs", fontSize = 11.sp, color = ElectricAqua)
+                        }
+                    }
+                }
                 items(areas, key = OfflineMapArea::id) { area ->
                     GlassSurface(cornerRadius = 16.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(12.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
