@@ -14,6 +14,11 @@ import com.example.offlinewalkietalkie.history.VoiceMessage
 import com.example.offlinewalkietalkie.data.OfflineMapArea
 import com.example.offlinewalkietalkie.data.OfflineMapRepository
 import com.example.offlinewalkietalkie.data.OfflineMapPoint
+import com.example.offlinewalkietalkie.data.mbtiles.MbTilesPackage
+import com.example.offlinewalkietalkie.data.mbtiles.MbTilesRepository
+import com.example.offlinewalkietalkie.data.mbtiles.MbTile
+import com.example.offlinewalkietalkie.voice.AudioRoute
+import android.net.Uri
 import com.example.offlinewalkietalkie.mesh.RoutingManager
 import com.example.offlinewalkietalkie.protocol.FloorState
 import com.example.offlinewalkietalkie.protocol.Frame
@@ -74,6 +79,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     private val routingManager = RoutingManager(transport)
     private val voiceEngine = VoiceEngine(codec = AmrNbCodec(), context = application)
     private val offlineMapRepository = OfflineMapRepository(application)
+    private val mbTilesRepository = MbTilesRepository(application)
     private val cryptoManager = CryptoManager()
 
     private val sessionId: Long = System.currentTimeMillis()
@@ -206,6 +212,16 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     val offlineMapStorageUsed = MutableStateFlow(offlineMapRepository.getStorageUsedBytes())
     val offlineMapStorageQuota: Long = offlineMapRepository.getStorageQuotaBytes()
 
+    // --- MBTiles Offline Vector & Raster Tile Packages ---
+    private val _mbTilesPackages = MutableStateFlow(mbTilesRepository.listPackages())
+    val mbTilesPackages = _mbTilesPackages.asStateFlow()
+    private val _selectedMbTilesPackage = MutableStateFlow<MbTilesPackage?>(null)
+    val selectedMbTilesPackage = _selectedMbTilesPackage.asStateFlow()
+    private val _selectedTilePreview = MutableStateFlow<MbTile?>(null)
+    val selectedTilePreview = _selectedTilePreview.asStateFlow()
+    val mbTilesStorageUsed = MutableStateFlow(mbTilesRepository.getStorageUsedBytes())
+    val mbTilesStorageQuota: Long = mbTilesRepository.getStorageQuotaBytes()
+
     // --- 2. Offline GPS Radar & Directional Compass ---
     val locationProvider = LocationProvider(application)
     val compassManager = CompassManager(application)
@@ -252,6 +268,11 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     val isVolumeKeyPttEnabled = hardwarePttManager.isVolumeKeyPttEnabled
     val isBluetoothScoActive = hardwarePttManager.isBluetoothScoActive
 
+    val currentAudioRoute: StateFlow<AudioRoute> = voiceEngine.routeManager?.currentRoute
+        ?: MutableStateFlow(AudioRoute.SPEAKER).asStateFlow()
+    val availableAudioRoutes: StateFlow<List<AudioRoute>> = voiceEngine.routeManager?.availableRoutes
+        ?: MutableStateFlow(listOf(AudioRoute.SPEAKER, AudioRoute.EARPIECE)).asStateFlow()
+
     // --- 6. Floating PTT Bubble Service ---
     private val _isFloatingPttActive = MutableStateFlow(false)
     val isFloatingPttActive = _isFloatingPttActive.asStateFlow()
@@ -275,6 +296,12 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     )
 
     init {
+        WalkieTalkieForegroundService.onPttPressFromHeadset = { requestPtt() }
+        WalkieTalkieForegroundService.onPttReleaseFromHeadset = { releasePtt() }
+        WalkieTalkieForegroundService.onPttToggleFromNotification = {
+            if (floorState.value is FloorState.Idle) requestPtt() else releasePtt()
+        }
+        WalkieTalkieForegroundService.onLeaveFromNotification = { leaveSession() }
         floorController.onTransmitPendingFrames = { frames ->
             frames.forEach { frame ->
                 broadcastVoiceFrame(frame.sequence, frame.data)
@@ -1092,6 +1119,59 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         _selectedOfflineMapRoads.value = emptyList()
     }
 
+    // --- MBTiles Operations ---
+    fun refreshMbTilesList() {
+        _mbTilesPackages.value = mbTilesRepository.listPackages()
+        mbTilesStorageUsed.value = mbTilesRepository.getStorageUsedBytes()
+    }
+
+    fun restoreBundledMbTiles() {
+        _mbTilesPackages.value = mbTilesRepository.restoreBundledPacks()
+        mbTilesStorageUsed.value = mbTilesRepository.getStorageUsedBytes()
+    }
+
+    fun importMbTiles(uri: Uri, displayName: String? = null): Boolean {
+        return try {
+            val pack = mbTilesRepository.importFromUri(uri, displayName)
+            _mbTilesPackages.value = mbTilesRepository.listPackages()
+            mbTilesStorageUsed.value = mbTilesRepository.getStorageUsedBytes()
+            selectMbTiles(pack)
+            true
+        } catch (e: Exception) {
+            _offlineMapError.value = "MBTiles import error: ${e.message}"
+            false
+        }
+    }
+
+    fun deleteMbTiles(pack: MbTilesPackage) {
+        mbTilesRepository.deletePackage(pack)
+        _mbTilesPackages.value = mbTilesRepository.listPackages()
+        mbTilesStorageUsed.value = mbTilesRepository.getStorageUsedBytes()
+        if (_selectedMbTilesPackage.value?.id == pack.id) {
+            _selectedMbTilesPackage.value = null
+            _selectedTilePreview.value = null
+        }
+    }
+
+    fun clearAllMbTiles() {
+        mbTilesRepository.deleteAllPackages()
+        _mbTilesPackages.value = emptyList()
+        _selectedMbTilesPackage.value = null
+        _selectedTilePreview.value = null
+        mbTilesStorageUsed.value = mbTilesRepository.getStorageUsedBytes()
+    }
+
+    fun selectMbTiles(pack: MbTilesPackage?) {
+        _selectedMbTilesPackage.value = pack
+        if (pack != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                _selectedTilePreview.value = mbTilesRepository.getSampleTile(pack)
+            }
+        } else {
+            _selectedTilePreview.value = null
+        }
+    }
+
     fun markTextMessagesRead() {
         _textMessages.value = _textMessages.value.map { msg ->
             if (msg.senderMemberId != sessionId) msg.copy(isRead = true) else msg
@@ -1162,6 +1242,11 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     fun toggleRelayMode() {
         _isRelayModeActive.value = !_isRelayModeActive.value
+    }
+
+    fun setAudioRoute(route: AudioRoute) {
+        voiceEngine.setAudioRoute(route)
+        _speakerphoneEnabled.value = (route == AudioRoute.SPEAKER)
     }
 
     fun toggleAudioRoute() {
@@ -1524,6 +1609,9 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     fun stopReplay() {
         voiceHistoryManager.stopReplay()
     }
+
+    fun isBatteryOptimizationIgnored(): Boolean = hardwarePttManager.isBatteryOptimizationIgnored()
+    fun getBatteryOptimizationIntent(): Intent = hardwarePttManager.createBatteryOptimizationIntent()
 
     fun setVolumeKeyPttEnabled(enabled: Boolean) {
         hardwarePttManager.setVolumeKeyPttEnabled(enabled)

@@ -30,7 +30,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Connect foreground notification actions
+        // Connect foreground notification and headset media actions
+        WalkieTalkieForegroundService.onPttPressFromHeadset = {
+            viewModel.requestPtt()
+        }
+        WalkieTalkieForegroundService.onPttReleaseFromHeadset = {
+            viewModel.releasePtt()
+        }
         WalkieTalkieForegroundService.onPttToggleFromNotification = {
             val current = viewModel.floorState.value
             if (current is FloorState.Idle) {

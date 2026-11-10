@@ -36,3 +36,4 @@
 -keep class com.example.offlinewalkietalkie.diagnostics.** { *; }
 -keep class com.example.offlinewalkietalkie.voice.** { *; }
 -keep class com.example.offlinewalkietalkie.data.OfflineMap** { *; }
+-keep class com.example.offlinewalkietalkie.data.mbtiles.** { *; }

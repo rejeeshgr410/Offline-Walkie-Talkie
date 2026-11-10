@@ -199,12 +199,16 @@ class VoiceEngine(
     }
 
     fun setSpeakerphone(enabled: Boolean) {
-        speakerphoneEnabled = enabled
-        routeManager?.setSpeakerphone(enabled)
-        // Restart AudioTrack with the correct usage attribute for the new route
-        playback.start(useSpeaker = enabled)
-        routeManager?.ensureVolume(enabled)
-        Log.i(TAG, "setSpeakerphone: restarted AudioTrack with useSpeaker=$enabled")
+        setAudioRoute(if (enabled) AudioRoute.SPEAKER else AudioRoute.EARPIECE)
+    }
+
+    fun setAudioRoute(route: AudioRoute) {
+        val useSpeaker = route == AudioRoute.SPEAKER
+        speakerphoneEnabled = useSpeaker
+        routeManager?.setAudioRoute(route)
+        playback.start(useSpeaker = useSpeaker)
+        routeManager?.ensureVolume(useSpeaker)
+        Log.i(TAG, "setAudioRoute: active route=$route (useSpeaker=$useSpeaker)")
     }
 
     private fun mixFrames(frames: List<ShortArray>): ShortArray {

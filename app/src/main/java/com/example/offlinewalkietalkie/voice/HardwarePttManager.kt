@@ -1,11 +1,15 @@
 package com.example.offlinewalkietalkie.voice
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,7 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Manages physical button PTT (Volume Down, Headset Hook) for screen-off pocket operation,
- * tactile haptic confirmations, and Bluetooth SCO headset audio routing.
+ * tactile haptic confirmations, and battery optimization verification for background endurance.
  */
 class HardwarePttManager(
     private val context: Context,
@@ -25,6 +29,7 @@ class HardwarePttManager(
     }
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    private val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
 
     private val _isVolumeKeyPttEnabled = MutableStateFlow(true)
     val isVolumeKeyPttEnabled = _isVolumeKeyPttEnabled.asStateFlow()
@@ -37,6 +42,22 @@ class HardwarePttManager(
     fun setVolumeKeyPttEnabled(enabled: Boolean) {
         _isVolumeKeyPttEnabled.value = enabled
         Log.i(TAG, "Hardware Volume PTT enabled: $enabled")
+    }
+
+    /**
+     * Checks whether the app is exempt from Android Doze mode and background battery optimizations.
+     */
+    fun isBatteryOptimizationIgnored(): Boolean {
+        return powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+    }
+
+    /**
+     * Creates an intent requesting battery optimization exemption for uninterrupted background reception.
+     */
+    fun createBatteryOptimizationIntent(): Intent {
+        return Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:${context.packageName}")
+        }
     }
 
     /**
@@ -121,7 +142,7 @@ class HardwarePttManager(
                 }
             }
         } catch (e: Exception) {
-            // Ignore if vibration fails or permission not granted
+            // Ignore if vibration fails
         }
     }
 }

@@ -43,6 +43,7 @@ import com.example.offlinewalkietalkie.channel.TextDeliveryStatus
 import com.example.offlinewalkietalkie.protocol.FloorState
 import com.example.offlinewalkietalkie.theme.*
 import com.example.offlinewalkietalkie.transport.TransportType
+import com.example.offlinewalkietalkie.voice.AudioRoute
 import com.example.offlinewalkietalkie.ui.components.GlassSurface
 import com.example.offlinewalkietalkie.ui.components.PttOrb
 import com.example.offlinewalkietalkie.util.PermissionManager
@@ -1737,6 +1738,9 @@ fun SettingsScreen(
 ) {
     val isOutdoorMode by viewModel.isOutdoorMode.collectAsState()
     val speakerphoneEnabled by viewModel.speakerphoneEnabled.collectAsState()
+    val currentAudioRoute by viewModel.currentAudioRoute.collectAsState()
+    val availableAudioRoutes by viewModel.availableAudioRoutes.collectAsState()
+    var isBatteryExempt by remember { mutableStateOf(viewModel.isBatteryOptimizationIgnored()) }
     val disturbanceMode by viewModel.disturbanceMode.collectAsState()
     val allowIncomingRequests by viewModel.allowIncomingRequests.collectAsState()
     var loopbackEnabled by remember { mutableStateOf(false) }
@@ -1837,16 +1841,9 @@ fun SettingsScreen(
 
                         HorizontalDivider(color = AppleGlassBorder)
 
-                        // Speakerphone vs Earpiece
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.toggleAudioRoute() }
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        // Audio Output Route Selector
+                        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     modifier = Modifier
                                         .size(32.dp)
@@ -1858,18 +1855,40 @@ fun SettingsScreen(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text("Speakerphone", style = AppleHeadline, fontSize = 14.sp)
-                                    Text(if (speakerphoneEnabled) "Speaker active" else "Earpiece active", style = AppleFootnote, color = AppleTextSecondary)
+                                    Text("Audio Output Route", style = AppleHeadline, fontSize = 14.sp)
+                                    Text("Active: " + currentAudioRoute.displayName, style = AppleFootnote, color = AppleSystemTeal)
                                 }
                             }
-                            Switch(
-                                checked = speakerphoneEnabled,
-                                onCheckedChange = { viewModel.toggleAudioRoute() },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = AppleSystemGreen
-                                )
-                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                availableAudioRoutes.forEach { route ->
+                                    val isSelected = currentAudioRoute == route
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isSelected) AppleSystemBlue else AppleCardSurfaceSecondary)
+                                            .clickable { viewModel.setAudioRoute(route) }
+                                            .padding(vertical = 6.dp, horizontal = 4.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            when (route) {
+                                                AudioRoute.SPEAKER -> "Speaker"
+                                                AudioRoute.EARPIECE -> "Earpiece"
+                                                AudioRoute.BLUETOOTH_SCO -> "BT Headset"
+                                                AudioRoute.WIRED_HEADSET -> "Wired"
+                                            },
+                                            style = AppleCaption1,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isSelected) Color.White else AppleTextSecondary
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         HorizontalDivider(color = AppleGlassBorder)
@@ -2082,6 +2101,68 @@ fun SettingsScreen(
                                     checkedTrackColor = AppleSystemGreen
                                 )
                             )
+                        }
+
+                        HorizontalDivider(color = AppleGlassBorder)
+
+                        // Background Endurance / Battery Optimization Exemption
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (!isBatteryExempt) {
+                                        try {
+                                            context.startActivity(viewModel.getBatteryOptimizationIntent())
+                                            isBatteryExempt = viewModel.isBatteryOptimizationIgnored()
+                                        } catch (e: Exception) {}
+                                    }
+                                }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (isBatteryExempt) AppleSystemGreen.copy(alpha = 0.2f) else AppleSystemOrange.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        if (isBatteryExempt) Icons.Default.BatteryChargingFull else Icons.Default.BatteryAlert,
+                                        null,
+                                        tint = if (isBatteryExempt) AppleSystemGreen else AppleSystemOrange,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text("Background Doze Exemption", style = AppleHeadline, fontSize = 14.sp)
+                                    Text(
+                                        if (isBatteryExempt) "Unrestricted • Zero packet drop in pocket/sleep"
+                                        else "Optimized • Tap to allow 60-min screen-off reception",
+                                        style = AppleFootnote,
+                                        color = if (isBatteryExempt) AppleSystemGreen else AppleSystemOrange
+                                    )
+                                }
+                            }
+                            if (!isBatteryExempt) {
+                                Button(
+                                    onClick = {
+                                        try {
+                                            context.startActivity(viewModel.getBatteryOptimizationIntent())
+                                            isBatteryExempt = viewModel.isBatteryOptimizationIgnored()
+                                        } catch (e: Exception) {}
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = AppleSystemOrange, contentColor = Color.White),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(30.dp)
+                                ) {
+                                    Text("Allow", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
 
                         HorizontalDivider(color = AppleGlassBorder)
