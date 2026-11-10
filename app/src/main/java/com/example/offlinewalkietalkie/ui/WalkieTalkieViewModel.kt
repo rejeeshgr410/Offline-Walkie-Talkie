@@ -40,6 +40,9 @@ import com.example.offlinewalkietalkie.transport.TransportSelector
 import com.example.offlinewalkietalkie.transport.TransportType
 import com.example.offlinewalkietalkie.voice.AmrNbCodec
 import com.example.offlinewalkietalkie.voice.HardwarePttManager
+import com.example.offlinewalkietalkie.voice.InstantReplayBuffer
+import com.example.offlinewalkietalkie.voice.RogerBeepGenerator
+import com.example.offlinewalkietalkie.voice.RogerBeepStyle
 import com.example.offlinewalkietalkie.voice.VoiceEngine
 import java.io.ByteArrayOutputStream
 import com.example.offlinewalkietalkie.channel.*
@@ -174,6 +177,9 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     val replayBuffer = ReplayBuffer(scope = viewModelScope)
     val replayTransmissions = replayBuffer.transmissionList
 
+    val rogerBeepGenerator = RogerBeepGenerator(scope = viewModelScope)
+    val instantReplayBuffer = InstantReplayBuffer(sampleRate = voiceEngine.sampleRate, scope = viewModelScope)
+
     private val _textMessages = MutableStateFlow<List<TextMessage>>(emptyList())
     val textMessages = _textMessages.asStateFlow()
 
@@ -183,6 +189,15 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     private val _disturbanceMode = MutableStateFlow(requestPrefs.getBoolean("disturbance_mode", false))
     val disturbanceMode = _disturbanceMode.asStateFlow()
+
+    private val _rogerBeepStyle = MutableStateFlow(
+        RogerBeepStyle.fromId(requestPrefs.getString("roger_beep_style", RogerBeepStyle.MOTOROLA.id) ?: RogerBeepStyle.MOTOROLA.id)
+    )
+    val rogerBeepStyle = _rogerBeepStyle.asStateFlow()
+
+    val canInstantReplay = instantReplayBuffer.hasAudio
+    val isInstantReplayPlaying = instantReplayBuffer.isPlaying
+    val instantReplayDurationMs = instantReplayBuffer.bufferedDurationMs
 
     private val _offlineMapAreas = MutableStateFlow(offlineMapRepository.list())
     val offlineMapAreas = _offlineMapAreas.asStateFlow()
@@ -350,12 +365,14 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             synchronized(outgoingAudioBuffer) {
                 outgoingAudioBuffer.write(pcm)
             }
+            instantReplayBuffer.write(pcm)
         }
 
         voiceEngine.onRawPcmPlayed = { pcm ->
             synchronized(incomingAudioBuffer) {
                 incomingAudioBuffer.write(pcm)
             }
+            instantReplayBuffer.write(pcm)
         }
 
         transport.connectionRequests.onEach { request ->
@@ -501,7 +518,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                                 relayVoiceFrame(decodedFrame, plaintext, ingressPeerId = peerId)
                             }
                         } else {
-                            Log.w(TAG, "VOICE decrypt FAILED from $peerId seq=${decodedFrame.sequence} payloadSize=${decodedFrame.payload.size} authTagSize=${decodedFrame.authTag?.size}")
+                            Log.w(TAG, "VOICE decrypt FAILED from $peerId seq=${decodedFrame.sequence} payloadSize=${decodedFrame.payload.size} authTagSize=${decodedFrame.authTag.size}")
                         }
                     } else {
                         // P0-04 Remediation: Fail-closed security. Reject unauthenticated or unencrypted voice frames.
@@ -518,6 +535,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                         if (holderId == 0L) {
                             floorController.onFloorFreed()
                             replayBuffer.onTransmissionCompleted()
+                            rogerBeepGenerator.playOutroTone(_rogerBeepStyle.value)
 
                             val inPcm = synchronized(incomingAudioBuffer) {
                                 val bytes = incomingAudioBuffer.toByteArray()
@@ -1221,7 +1239,11 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    private val _isLoopbackMode = MutableStateFlow(false)
+    val isLoopbackMode = _isLoopbackMode.asStateFlow()
+
     fun setLoopbackMode(enabled: Boolean) {
+        _isLoopbackMode.value = enabled
         voiceEngine.isLoopback = enabled
     }
 
@@ -1434,6 +1456,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         if (current !is FloorState.Idle) return
         if (_isRecording.value) return
 
+        rogerBeepGenerator.playIntroTone(_rogerBeepStyle.value)
         synchronized(outgoingAudioBuffer) { outgoingAudioBuffer.reset() }
         outgoingStartTimeMs = System.currentTimeMillis()
         updateFloatingOverlay(FloatingPttService.STATE_TRANSMITTING, "TALKING")
@@ -1463,6 +1486,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     fun releasePtt() {
         if (!_isRecording.value && floorController.floorState.value is FloorState.Idle) return
         Log.i(TAG, "PTT stop")
+        rogerBeepGenerator.playOutroTone(_rogerBeepStyle.value)
         floorController.releasePtt()
         _isRecording.value = false
         voiceEngine.stopRecording()
@@ -1602,12 +1626,42 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         voiceHistoryManager.replayMessage(message)
     }
 
+        fun setRogerBeepStyle(style: RogerBeepStyle) {
+        _rogerBeepStyle.value = style
+        requestPrefs.edit().putString("roger_beep_style", style.id).apply()
+        Log.i(TAG, "Roger beep style updated: ${style.displayName}")
+    }
+
+    fun previewRogerBeepStyle(style: RogerBeepStyle) {
+        rogerBeepGenerator.previewStyle(style)
+    }
+
+    fun replayInstant10s() {
+        if (instantReplayBuffer.isPlaying.value) {
+            instantReplayBuffer.stop()
+        } else {
+            instantReplayBuffer.playLatest()
+        }
+    }
+
+    fun stopInstantReplay() {
+        instantReplayBuffer.stop()
+    }
+
     fun replayLastMessage() {
-        voiceHistoryManager.replayLastMessage()
+        Log.i(TAG, "replayLastMessage triggered! hasInstantAudio=${instantReplayBuffer.hasAudio.value} isPlaying=${instantReplayBuffer.isPlaying.value}")
+        if (instantReplayBuffer.isPlaying.value) {
+            instantReplayBuffer.stop()
+        } else if (instantReplayBuffer.hasAudio.value) {
+            instantReplayBuffer.playLatest()
+        } else {
+            voiceHistoryManager.replayLastMessage()
+        }
     }
 
     fun stopReplay() {
         voiceHistoryManager.stopReplay()
+        instantReplayBuffer.stop()
     }
 
     fun isBatteryOptimizationIgnored(): Boolean = hardwarePttManager.isBatteryOptimizationIgnored()
@@ -1710,6 +1764,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         stopFloatingPtt()
         sosManager.silenceAlarm()
         voiceHistoryManager.stopReplay()
+        instantReplayBuffer.clear()
         teardownScope.launch { transport.stop() }
     }
 

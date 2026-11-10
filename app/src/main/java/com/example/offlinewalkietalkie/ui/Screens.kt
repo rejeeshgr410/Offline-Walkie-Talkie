@@ -44,6 +44,7 @@ import com.example.offlinewalkietalkie.protocol.FloorState
 import com.example.offlinewalkietalkie.theme.*
 import com.example.offlinewalkietalkie.transport.TransportType
 import com.example.offlinewalkietalkie.voice.AudioRoute
+import com.example.offlinewalkietalkie.voice.RogerBeepStyle
 import com.example.offlinewalkietalkie.ui.components.GlassSurface
 import com.example.offlinewalkietalkie.ui.components.PttOrb
 import com.example.offlinewalkietalkie.util.PermissionManager
@@ -297,6 +298,9 @@ fun HomeScreen(
     val isBroadcastingSos by viewModel.isBroadcastingSos.collectAsState()
     val peerTelemetry by viewModel.peerTelemetry.collectAsState()
     val localBatteryPercent by viewModel.localBatteryPercent.collectAsState()
+    val canInstantReplay by viewModel.canInstantReplay.collectAsState()
+    val isInstantReplayPlaying by viewModel.isInstantReplayPlaying.collectAsState()
+    val instantReplayDurationMs by viewModel.instantReplayDurationMs.collectAsState()
 
     if (showSosModal) {
         SosBroadcastModal(
@@ -448,6 +452,9 @@ fun HomeScreen(
                     transportTypeName = transportTypeName,
                     peerTelemetry = peerTelemetry,
                     localBatteryPercent = localBatteryPercent,
+                    canInstantReplay = canInstantReplay,
+                    isInstantReplayPlaying = isInstantReplayPlaying,
+                    instantReplayDurationMs = instantReplayDurationMs,
                     onToggleSpeaker = { viewModel.toggleAudioRoute() },
                     onToggleMute = { viewModel.toggleMute() },
                     onToggleRelay = { viewModel.toggleRelayMode() },
@@ -602,6 +609,9 @@ private fun ActiveSessionContent(
     transportTypeName: String,
     peerTelemetry: Map<String, com.example.offlinewalkietalkie.protocol.PeerTelemetry> = emptyMap(),
     localBatteryPercent: Int = 100,
+    canInstantReplay: Boolean = false,
+    isInstantReplayPlaying: Boolean = false,
+    instantReplayDurationMs: Long = 0L,
     onToggleSpeaker: () -> Unit,
     onToggleMute: () -> Unit,
     onToggleRelay: () -> Unit,
@@ -821,7 +831,7 @@ private fun ActiveSessionContent(
                     onClick = onToggleSpeaker,
                     modifier = Modifier.size(48.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize().clickable(onClick = onReplayLast)) {
                         Icon(
                             imageVector = if (speakerphoneEnabled) Icons.Default.VolumeUp else Icons.Default.Headset,
                             contentDescription = if (speakerphoneEnabled) "Speakerphone" else "Earpiece",
@@ -840,7 +850,7 @@ private fun ActiveSessionContent(
                     },
                     modifier = Modifier.size(48.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize().clickable(onClick = onReplayLast)) {
                         Icon(
                             imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
                             contentDescription = if (isMuted) "Unmute Audio" else "Mute Audio",
@@ -871,7 +881,7 @@ private fun ActiveSessionContent(
                     onClick = onNavigateToContacts,
                     modifier = Modifier.size(48.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize().clickable(onClick = onReplayLast)) {
                         Icon(
                             imageVector = Icons.Default.People,
                             contentDescription = "Contacts Roster",
@@ -888,12 +898,76 @@ private fun ActiveSessionContent(
                     onClick = onReplayLast,
                     modifier = Modifier.size(48.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize().clickable(onClick = onReplayLast)) {
                         Icon(
-                            imageVector = Icons.Default.Replay,
-                            contentDescription = "Replay Last Audio",
-                            tint = AppleSystemTeal,
+                            imageVector = if (isInstantReplayPlaying) Icons.Default.Stop else Icons.Default.Replay,
+                            contentDescription = if (isInstantReplayPlaying) "Stop Replay" else "10s Instant Replay",
+                            tint = if (isInstantReplayPlaying) AppleSystemPink else if (canInstantReplay) AppleSystemTeal else AppleTextTertiary,
                             modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+
+
+        // 2b. 10-Second Instant Audio Replay Tactical Banner
+        if (canInstantReplay) {
+            GlassSurface(
+                cornerRadius = 16.dp,
+                isOutdoorMode = isOutdoorMode,
+                interactive = true,
+                onClick = onReplayLast,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(if (isInstantReplayPlaying) AppleSystemPink.copy(alpha = 0.2f) else AppleSystemTeal.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isInstantReplayPlaying) Icons.Default.Stop else Icons.Default.Replay,
+                                contentDescription = null,
+                                tint = if (isInstantReplayPlaying) AppleSystemPink else AppleSystemTeal,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = if (isInstantReplayPlaying) "Playing Instant Replay..." else "10s Instant Replay Ready",
+                                style = AppleHeadline,
+                                fontSize = 13.sp,
+                                color = if (isInstantReplayPlaying) AppleSystemPink else AppleSystemTeal
+                            )
+                            Text(
+                                text = if (isInstantReplayPlaying) "Tap to cancel audio playback" else "Tap to review last ${minOf(10, (instantReplayDurationMs / 1000).coerceAtLeast(1))}s transmission",
+                                style = AppleCaption1,
+                                color = AppleTextSecondary
+                            )
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isInstantReplayPlaying) AppleSystemPink else AppleSystemTeal)
+                            .clickable(onClick = onReplayLast)
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Text(
+                            text = if (isInstantReplayPlaying) "STOP" else "REPLAY",
+                            style = AppleCaption1.copy(fontWeight = FontWeight.Bold, color = Color.White)
                         )
                     }
                 }
@@ -1743,7 +1817,8 @@ fun SettingsScreen(
     var isBatteryExempt by remember { mutableStateOf(viewModel.isBatteryOptimizationIgnored()) }
     val disturbanceMode by viewModel.disturbanceMode.collectAsState()
     val allowIncomingRequests by viewModel.allowIncomingRequests.collectAsState()
-    var loopbackEnabled by remember { mutableStateOf(false) }
+    val loopbackEnabled by viewModel.isLoopbackMode.collectAsState()
+    val rogerBeepStyle by viewModel.rogerBeepStyle.collectAsState()
 
     val isSurvivalMode by viewModel.isSurvivalCodecMode.collectAsState()
     val isFloatingActive by viewModel.isFloatingPttActive.collectAsState()
@@ -1893,6 +1968,110 @@ fun SettingsScreen(
 
                         HorizontalDivider(color = AppleGlassBorder)
 
+
+                        HorizontalDivider(color = AppleGlassBorder)
+
+                        // Roger Beep & Tactical Chimes Selector
+                        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(AppleSystemTeal.copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Default.NotificationsActive, null, tint = AppleSystemTeal, modifier = Modifier.size(18.dp))
+                                    }
+                                    Spacer(Modifier.width(12.dp))
+                                    Column {
+                                        Text("Roger Beep & PTT Chimes", style = AppleHeadline, fontSize = 14.sp)
+                                        Text(rogerBeepStyle.displayName + " • " + rogerBeepStyle.description, style = AppleFootnote, color = AppleTextSecondary)
+                                    }
+                                }
+                                if (rogerBeepStyle != RogerBeepStyle.NONE) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(AppleSystemTeal.copy(alpha = 0.15f))
+                                            .clickable { viewModel.previewRogerBeepStyle(rogerBeepStyle) }
+                                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.PlayArrow, contentDescription = "Preview Tone", tint = AppleSystemTeal, modifier = Modifier.size(14.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("Preview", style = AppleCaption1, fontWeight = FontWeight.Bold, color = AppleSystemTeal)
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(10.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    listOf(RogerBeepStyle.MOTOROLA, RogerBeepStyle.QUINDAR, RogerBeepStyle.TACTICAL_CHIRP).forEach { style ->
+                                        val isSelected = rogerBeepStyle == style
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(if (isSelected) AppleSystemTeal else AppleCardSurfaceSecondary)
+                                                .clickable { viewModel.setRogerBeepStyle(style) }
+                                                .padding(vertical = 8.dp, horizontal = 4.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                when (style) {
+                                                    RogerBeepStyle.MOTOROLA -> "Motorola"
+                                                    RogerBeepStyle.QUINDAR -> "Quindar"
+                                                    RogerBeepStyle.TACTICAL_CHIRP -> "Tactical"
+                                                    else -> style.displayName
+                                                },
+                                                style = AppleCaption1,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (isSelected) Color.White else AppleTextSecondary
+                                            )
+                                        }
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    listOf(RogerBeepStyle.SQUELCH, RogerBeepStyle.NONE).forEach { style ->
+                                        val isSelected = rogerBeepStyle == style
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(if (isSelected) AppleSystemTeal else AppleCardSurfaceSecondary)
+                                                .clickable { viewModel.setRogerBeepStyle(style) }
+                                                .padding(vertical = 8.dp, horizontal = 4.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                when (style) {
+                                                    RogerBeepStyle.SQUELCH -> "Tone Squelch"
+                                                    RogerBeepStyle.NONE -> "Silent (Covert)"
+                                                    else -> style.displayName
+                                                },
+                                                style = AppleCaption1,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (isSelected) Color.White else AppleTextSecondary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // Bluetooth SCO Headset
                         Row(
                             modifier = Modifier
@@ -1957,7 +2136,6 @@ fun SettingsScreen(
                             Switch(
                                 checked = loopbackEnabled,
                                 onCheckedChange = {
-                                    loopbackEnabled = it
                                     viewModel.setLoopbackMode(it)
                                 },
                                 colors = SwitchDefaults.colors(

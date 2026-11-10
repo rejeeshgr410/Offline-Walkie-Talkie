@@ -5,6 +5,10 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.ripple
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -34,7 +38,12 @@ fun GlassSurface(
     content: @Composable () -> Unit
 ) {
     val shape = RoundedCornerShape(cornerRadius)
-    var isPressed by remember { mutableStateOf(false) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by if (interactive && onClick != null) {
+        interactionSource.collectIsPressedAsState()
+    } else {
+        remember { mutableStateOf(false) }
+    }
 
     val pressScale by animateFloatAsState(
         targetValue = if (interactive && isPressed) 0.96f else 1.0f,
@@ -61,16 +70,11 @@ fun GlassSurface(
             .border(borderStroke, shape = shape)
             .then(
                 if (onClick != null) {
-                    Modifier.pointerInput(interactive) {
-                        detectTapGestures(
-                            onPress = {
-                                if (interactive) isPressed = true
-                                tryAwaitRelease()
-                                if (interactive) isPressed = false
-                            },
-                            onTap = { onClick() }
-                        )
-                    }
+                    Modifier.clickable(
+                        interactionSource = interactionSource,
+                        indication = ripple(),
+                        onClick = onClick
+                    )
                 } else Modifier
             )
     ) {
