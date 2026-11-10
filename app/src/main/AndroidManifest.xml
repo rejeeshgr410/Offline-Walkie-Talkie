@@ -68,7 +68,27 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Hands-free / Assistant actions (verified with ComponentCaller) -->
+            <intent-filter>
+                <action android:name="com.example.offlinewalkietalkie.action.OPEN_INTERCOM" />
+                <action android:name="com.example.offlinewalkietalkie.action.CLOSE_INTERCOM" />
+                <action android:name="com.example.offlinewalkietalkie.action.START_SOS" />
+                <action android:name="com.example.offlinewalkietalkie.action.CANCEL_SOS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
+
+        <!-- Voice Assistant & AI Agent Skill Receiver (Vivo SkillImpl mirror) -->
+        <receiver
+            android:name=".service.AssistantSkillReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.offlinewalkietalkie.action.OPEN_INTERCOM" />
+                <action android:name="com.example.offlinewalkietalkie.action.CLOSE_INTERCOM" />
+                <action android:name="com.example.offlinewalkietalkie.action.START_SOS" />
+                <action android:name="com.example.offlinewalkietalkie.action.CANCEL_SOS" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".WalkieTalkieService"

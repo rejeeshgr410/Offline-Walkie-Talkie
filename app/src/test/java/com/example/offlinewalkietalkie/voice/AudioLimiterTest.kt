@@ -46,4 +46,20 @@ class AudioLimiterTest {
         // With reset, should immediately start with preGain without residual attenuation
         assertTrue(quiet[0] > 1000)
     }
+
+    @Test
+    fun testByteArrayProcessing() {
+        val limiter = AudioLimiter(sampleRate = 8000, preGain = 2.0f, ceiling = 30000f)
+        val pcmBytes = ByteArray(320)
+        // Set sample 0 to 1000 in Little Endian: low=0xE8, high=0x03
+        pcmBytes[0] = 0xE8.toByte()
+        pcmBytes[1] = 0x03.toByte()
+
+        limiter.process(pcmBytes, pcmBytes.size)
+
+        val low = pcmBytes[0].toInt() and 0xFF
+        val high = pcmBytes[1].toInt()
+        val boosted = (high shl 8) or low
+        assertEquals(2000, boosted)
+    }
 }

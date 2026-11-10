@@ -10,6 +10,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
+import com.example.offlinewalkietalkie.protocol.VivoLeanProtocol
 import com.example.offlinewalkietalkie.transport.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
@@ -500,6 +501,30 @@ class BleGattTransport(private val context: Context) : Transport {
     private fun handleIncomingBytes(address: String, data: ByteArray) {
         if (data.isEmpty()) return
 
+        // Check for Vivo-style Lean Wire Protocol (pj.e.h / pj.w.i)
+        if (VivoLeanProtocol.isLeanPacket(data)) {
+            val packet = VivoLeanProtocol.decode(data)
+            if (packet != null) {
+                when (packet.type) {
+                    VivoLeanProtocol.TYPE_AUDIO_FRAME -> {
+                        _incomingFrames.tryEmit(IncomingFrame(address, packet.payload))
+                    }
+                    VivoLeanProtocol.TYPE_CODEC_REQ -> {
+                        Log.i(TAG, "Received Lean CODEC_REQ mode: 0x${Integer.toHexString(packet.codecMode)} from $address")
+                        val ack = VivoLeanProtocol.encode(type = VivoLeanProtocol.TYPE_CODEC_ACK, codecMode = packet.codecMode)
+                        coroutineScope.launch { writeRawPacket(address, ack) }
+                    }
+                    VivoLeanProtocol.TYPE_CODEC_ACK -> {
+                        Log.i(TAG, "Received Lean CODEC_ACK mode: 0x${Integer.toHexString(packet.codecMode)} from $address")
+                    }
+                    else -> {
+                        _incomingFrames.tryEmit(IncomingFrame(address, data))
+                    }
+                }
+                return
+            }
+        }
+
         when (data[0]) {
             PACKET_TYPE_SINGLE -> {
                 // Complete unfragmented frame
@@ -573,6 +598,46 @@ class BleGattTransport(private val context: Context) : Transport {
             return
         }
 
+        // Try Extended Advertising with LE Coded PHY (S=8) on API 26+ if hardware supports it
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bluetoothAdapter.isLeCodedPhySupported) {
+            try {
+                val params = AdvertisingSetParameters.Builder()
+                    .setLegacyMode(false)
+                    .setConnectable(true)
+                    .setScannable(true)
+                    .setPrimaryPhy(BluetoothDevice.PHY_LE_CODED)
+                    .setSecondaryPhy(BluetoothDevice.PHY_LE_CODED)
+                    .setInterval(AdvertisingSetParameters.INTERVAL_LOW)
+                    .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_HIGH)
+                    .build()
+
+                val data = AdvertiseData.Builder()
+                    .setIncludeDeviceName(true)
+                    .addServiceUuid(ParcelUuid(SERVICE_UUID))
+                    .build()
+
+                leAdvertiser?.startAdvertisingSet(params, data, null, null, null, object : AdvertisingSetCallback() {
+                    override fun onAdvertisingSetStarted(advertisingSet: AdvertisingSet?, txPower: Int, status: Int) {
+                        if (status == AdvertisingSetCallback.ADVERTISE_SUCCESS) {
+                            Log.i(TAG, "BLE Extended Advertising Set (LE Coded PHY S=8) active at txPower=$txPower")
+                            _isAdvertising.value = true
+                            _state.value = TransportState.ACTIVE
+                        } else {
+                            Log.w(TAG, "AdvertisingSet start failed status=$status, falling back to legacy")
+                            startLegacyAdvertising()
+                        }
+                    }
+                })
+                return
+            } catch (e: Throwable) {
+                Log.w(TAG, "startAdvertisingSet threw exception, falling back to legacy advertising", e)
+            }
+        }
+
+        startLegacyAdvertising()
+    }
+
+    private fun startLegacyAdvertising() {
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(true)
@@ -647,16 +712,26 @@ class BleGattTransport(private val context: Context) : Transport {
             .setServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
 
-        val settings = ScanSettings.Builder()
+        val settingsBuilder = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .setReportDelay(0)
-            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bluetoothAdapter.isLeCodedPhySupported) {
+            settingsBuilder.setPhy(ScanSettings.PHY_LE_ALL_SUPPORTED)
+            settingsBuilder.setLegacy(false)
+            try {
+                // Duplicate filtering optimization matching Vivo pj.w.b
+                val method = settingsBuilder.javaClass.getMethod("setDuplicatedFilter", Boolean::class.javaPrimitiveType)
+                method.invoke(settingsBuilder, false)
+            } catch (_: Throwable) {}
+        }
+        val settings = settingsBuilder.build()
 
         try {
             leScanner?.stopScan(scanCallback)
             leScanner?.startScan(listOf(filter), settings, scanCallback)
             _isDiscovering.value = true
-            Log.i(TAG, "BLE GATT scanning active for Walkie-Talkie peers")
+            Log.i(TAG, "BLE GATT scanning active for Walkie-Talkie peers (LE Coded PHY enabled: ${bluetoothAdapter.isLeCodedPhySupported})")
         } catch (e: Throwable) {
             Log.e(TAG, "startScan failed", e)
             _isDiscovering.value = false
