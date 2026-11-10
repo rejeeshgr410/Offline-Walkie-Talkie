@@ -99,13 +99,13 @@ fun GroupLobbyScreen(
                         shape = RoundedCornerShape(12.dp),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = AppleSystemBlue,
+                            focusedTextColor = AppleTextPrimary,
+                            unfocusedTextColor = AppleTextPrimary,
+                            focusedBorderColor = AppleSystemRed,
                             unfocusedBorderColor = AppleGlassBorder,
                             focusedContainerColor = AppleCardSurfaceSecondary,
                             unfocusedContainerColor = AppleCardSurfaceSecondary,
-                            cursorColor = AppleSystemBlue
+                            cursorColor = AppleSystemRed
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -400,7 +400,7 @@ private fun MemberRow(
                 if (member.state == MemberState.PENDING_APPROVAL && member.authCode != null) {
                     Text(
                         text = "Auth Code: ${member.authCode}",
-                        style = AppleMonospacedDigits.copy(color = Color.White, fontSize = 14.sp)
+                        style = AppleMonospacedDigits.copy(color = AppleTextPrimary, fontSize = 14.sp)
                     )
                 }
             }

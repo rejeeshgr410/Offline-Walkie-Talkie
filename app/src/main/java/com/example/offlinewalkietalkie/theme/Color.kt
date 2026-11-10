@@ -4,40 +4,50 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 
 // ============================================================================
-// Apple Human Interface Guidelines - System Primitives & Semantic Tokens
+// TalkLoop Modern Light Design System - Semantic Tokens & Primitives
 // ============================================================================
 
-// Apple iOS Dark Mode System Accents
-val AppleSystemBlue = Color(0xFF0A84FF)
-val AppleSystemGreen = Color(0xFF30D158)
-val AppleSystemIndigo = Color(0xFF5E5CE6)
-val AppleSystemOrange = Color(0xFFFF9F0A)
-val AppleSystemPink = Color(0xFFFF375F)
-val AppleSystemPurple = Color(0xFFBF5AF2)
-val AppleSystemRed = Color(0xFFFF453A)
-val AppleSystemTeal = Color(0xFF64D2FF)
-val AppleSystemYellow = Color(0xFFFFD60A)
+// Brand Primary Red & Vibrant Accents (Matches TalkLoop Reference Image)
+val BrandRed = Color(0xFFE60023)
+val BrandRedDark = Color(0xFFD6001C)
+val BrandRedLight = Color(0xFFFF2A3A)
+val BrandPinkBadge = Color(0xFFFFEFF1)
+val BrandPinkBadgeSelected = Color(0xFFFFE5E8)
 
-// Apple Surfaces & Materials (OLED True Black & Grouped Materials)
-val AppleBackground = Color(0xFF000000)
-val AppleBackgroundElevated = Color(0xFF07090E)
-val AppleGroupedBackground = Color(0xFF0F1219)
-val AppleCardSurface = Color(0xFF161A24)
-val AppleCardSurfaceSecondary = Color(0xFF202636)
-val AppleCardSurfaceTertiary = Color(0xFF2A3246)
-val AppleGlassFrosted = Color(0xD9161A24) // 85% opacity frosted glass
-val AppleGlassBorder = Color(0x1FFFFFFF) // Hairline 12% white
-val AppleGlassBorderHighlight = Color(0x38FFFFFF) // 22% white highlight
+// Modern Light System Accents
+val AppleSystemBlue = Color(0xFF2563EB)
+val AppleSystemGreen = Color(0xFF00C853)
+val AppleSystemIndigo = Color(0xFF4F46E5)
+val AppleSystemOrange = Color(0xFFFF9500)
+val AppleSystemPink = Color(0xFFFF2D55)
+val AppleSystemPurple = Color(0xFF9333EA)
+val AppleSystemRed = Color(0xFFE60023)
+val AppleSystemTeal = Color(0xFF0284C7)
+val AppleSystemYellow = Color(0xFFEAB308)
 
-// Apple SF Typography Neutrals
-val AppleTextPrimary = Color(0xFFFFFFFF)
-val AppleTextSecondary = Color(0x99FFFFFF) // 60% opacity
-val AppleTextTertiary = Color(0x4DFFFFFF) // 30% opacity
-val AppleTextQuaternary = Color(0x29FFFFFF) // 16% opacity
+// Modern Clean Light Canvas & Card Surfaces
+val AppleBackground = Color(0xFFF8F9FA)
+val AppleBackgroundElevated = Color(0xFFFFFFFF)
+val AppleGroupedBackground = Color(0xFFF1F3F5)
+val AppleCardSurface = Color(0xFFFFFFFF)
+val AppleCardSurfaceSecondary = Color(0xFFF3F4F6)
+val AppleCardSurfaceTertiary = Color(0xFFFFEFF1)
+val AppleGlassFrosted = Color(0xF5FFFFFF)
+val AppleGlassBorder = Color(0xFFE5E7EB)
+val AppleGlassBorderHighlight = Color(0xFFD1D5DB)
 
-// ============================================================================
-// Backward-Compatibility Aliases (Mapped to Apple System Tokens)
-// ============================================================================
+// High-Contrast Light Typography Neutrals
+val AppleTextPrimary = Color(0xFF111827)
+val AppleTextSecondary = Color(0xFF6B7280)
+val AppleTextTertiary = Color(0xFF9CA3AF)
+val AppleTextQuaternary = Color(0xFFE5E7EB)
+
+// Outdoor High-Contrast Mode (Clean light contrast)
+val OutdoorBackground = Color(0xFFFFFFFF)
+val OutdoorCardBackground = Color(0xFFFFFFFF)
+val OutdoorCardBorder = Color(0xFF111827)
+
+// Backward-Compatibility Aliases
 val ElectricAqua = AppleSystemTeal
 val MintGreen = AppleSystemGreen
 val BrightCyan = AppleSystemBlue
@@ -52,38 +62,28 @@ val PearlLight = AppleTextSecondary
 val GlassBackground = AppleCardSurface
 val GlassBackgroundHover = AppleCardSurfaceSecondary
 val GlassBorder = AppleGlassBorder
-val GlassSubtleBackground = Color(0x0FFFFFFF)
-
-// Outdoor High-Contrast Mode
-val OutdoorBackground = AppleBackground
-val OutdoorCardBackground = Color(0xFF141720)
-val OutdoorCardBorder = Color(0xFF3E475E)
+val GlassSubtleBackground = Color(0x0A000000)
 
 // Atmospheric Ambient Brushes
-val AtmosphericDarkBrush = Brush.radialGradient(
+val AtmosphericDarkBrush = Brush.verticalGradient(
     colors = listOf(
-        Color(0xFF121724), // Subtle deep blue-grey ambient top
-        Color(0xFF070A10), // Transition
-        AppleBackground    // Pure OLED black baseline
-    ),
-    radius = 1800f
+        Color(0xFFF8F9FA),
+        Color(0xFFF1F3F5),
+        Color(0xFFE9ECEF)
+    )
 )
 
-// Apple Studio PTT Acoustic Dial Gradients
-val PttReadyBrush = Brush.radialGradient(
+// PTT Acoustic Hero Gradients (Matches reference vibrant red hero button)
+val PttReadyBrush = Brush.linearGradient(
     colors = listOf(
-        Color(0xFF1D3557),
-        Color(0xFF132238),
-        Color(0xFF0A1322)
-    ),
-    radius = 350f
+        Color(0xFFFF3344),
+        Color(0xFFD6001C)
+    )
 )
 
-val PttTalkingBrush = Brush.radialGradient(
+val PttTalkingBrush = Brush.linearGradient(
     colors = listOf(
-        Color(0xFFFF3B30),
-        Color(0xFFC71D23),
-        Color(0xFF4A0A0E)
-    ),
-    radius = 350f
+        Color(0xFFFF1E27),
+        Color(0xFFB30014)
+    )
 )

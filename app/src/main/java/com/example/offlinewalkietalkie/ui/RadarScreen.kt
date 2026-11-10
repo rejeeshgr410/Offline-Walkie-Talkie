@@ -217,13 +217,13 @@ fun RadarScreen(
 
                     // Crosshairs
                     drawLine(
-                        color = Color.White.copy(alpha = 0.06f),
+                        color = AppleGlassBorder,
                         start = Offset(center.x, center.y - maxRadius),
                         end = Offset(center.x, center.y + maxRadius),
                         strokeWidth = 1f
                     )
                     drawLine(
-                        color = Color.White.copy(alpha = 0.06f),
+                        color = AppleGlassBorder,
                         start = Offset(center.x - maxRadius, center.y),
                         end = Offset(center.x + maxRadius, center.y),
                         strokeWidth = 1f
@@ -274,7 +274,7 @@ fun RadarScreen(
                     }
 
                     // Self central dot
-                    drawCircle(color = Color.White, radius = 5f, center = center)
+                    drawCircle(color = AppleSystemRed, radius = 5f, center = center)
                     drawCircle(color = AppleSystemBlue.copy(alpha = 0.4f), radius = 9f, center = center, style = Stroke(1.5f))
                 }
 

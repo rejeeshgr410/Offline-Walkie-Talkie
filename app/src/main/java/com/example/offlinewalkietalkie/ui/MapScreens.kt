@@ -80,12 +80,12 @@ fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                     currentLocation?.let { loc ->
                         val x = (size.width * (loc.longitude - minLon) / (maxLon - minLon)).toFloat().coerceIn(16f, size.width - 16f)
                         val y = (size.height * (maxLat - loc.latitude) / (maxLat - minLat)).toFloat().coerceIn(16f, size.height - 16f)
-                        drawCircle(Color.White, 7f, Offset(x, y))
-                        drawCircle(AppleSystemBlue.copy(alpha = 0.5f), 12f, Offset(x, y), style = androidx.compose.ui.graphics.drawscope.Stroke(1.5f))
+                        drawCircle(Color(0xFFE60023), 7f, Offset(x, y))
+                        drawCircle(Color(0xFFE60023).copy(alpha = 0.35f), 13f, Offset(x, y), style = androidx.compose.ui.graphics.drawscope.Stroke(1.5f))
                     }
                 }
             }
-            Text("Schematic coordinate grid • Cyan is recent, amber is stale, white is you", style = AppleCaption1, color = AppleTextTertiary, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+            Text("Schematic coordinate grid • Cyan is recent, amber is stale, red is you", style = AppleCaption1, color = AppleTextTertiary, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
             Spacer(Modifier.height(8.dp))
             if (locations.isEmpty()) {
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
@@ -280,14 +280,14 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Text("DOWNLOAD VECTOR AREA", style = AppleCaption2)
                                 val fieldColors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White,
-                                    focusedBorderColor = AppleSystemBlue,
+                                    focusedTextColor = AppleTextPrimary,
+                                    unfocusedTextColor = AppleTextPrimary,
+                                    focusedBorderColor = AppleSystemRed,
                                     unfocusedBorderColor = AppleGlassBorder,
                                     focusedContainerColor = AppleCardSurfaceSecondary,
                                     unfocusedContainerColor = AppleCardSurfaceSecondary,
-                                    cursorColor = AppleSystemBlue,
-                                    focusedLabelColor = AppleSystemBlue,
+                                    cursorColor = AppleSystemRed,
+                                    focusedLabelColor = AppleSystemRed,
                                     unfocusedLabelColor = AppleTextSecondary
                                 )
                                 val fieldShape = RoundedCornerShape(12.dp)

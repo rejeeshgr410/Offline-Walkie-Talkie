@@ -386,6 +386,8 @@ fun SosBroadcastModal(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = AppleTextPrimary,
+                        unfocusedTextColor = AppleTextPrimary,
                         focusedBorderColor = AppleSystemRed,
                         unfocusedBorderColor = AppleGlassBorder,
                         focusedContainerColor = AppleCardSurfaceSecondary,

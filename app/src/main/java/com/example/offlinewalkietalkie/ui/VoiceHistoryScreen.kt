@@ -89,26 +89,26 @@ fun VoiceHistoryScreen(
                             modifier = Modifier
                                 .size(40.dp)
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(AppleSystemBlue.copy(alpha = 0.18f)),
+                                .background(Color(0xFFFFEFF1)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.GraphicEq,
                                 contentDescription = null,
-                                tint = AppleSystemBlue,
+                                tint = Color(0xFFE60023),
                                 modifier = Modifier.size(24.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
-                            Text("Latest Transmission", style = AppleHeadline)
+                            Text("Latest Transmission", style = AppleHeadline, color = AppleTextPrimary)
                             Text("1-tap replay of latest audio", style = AppleFootnote, color = AppleTextSecondary)
                         }
                     }
                     Button(
                         onClick = { viewModel.replayLastMessage() },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = AppleSystemBlue,
+                            containerColor = Color(0xFFE60023),
                             contentColor = Color.White
                         ),
                         shape = RoundedCornerShape(12.dp),
@@ -213,19 +213,19 @@ fun VoiceMessageRow(
                     .size(42.dp)
                     .clip(CircleShape)
                     .background(
-                        if (isPlaying) AppleSystemRed
-                        else AppleSystemBlue.copy(alpha = 0.2f)
+                        if (isPlaying) Color(0xFFE60023)
+                        else Color(0xFFFFEFF1)
                     )
                     .border(
                         0.75.dp,
-                        if (isPlaying) AppleSystemRed else AppleSystemBlue.copy(alpha = 0.4f),
+                        if (isPlaying) Color(0xFFE60023) else Color(0xFFFFCDD2),
                         CircleShape
                     )
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
                     contentDescription = if (isPlaying) "Stop" else "Play",
-                    tint = if (isPlaying) Color.White else AppleSystemBlue,
+                    tint = if (isPlaying) Color.White else Color(0xFFE60023),
                     modifier = Modifier.size(22.dp)
                 )
             }
