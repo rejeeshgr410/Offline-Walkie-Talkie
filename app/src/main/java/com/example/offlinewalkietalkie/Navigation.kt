@@ -32,7 +32,7 @@ fun MainNavigation(viewModel: WalkieTalkieViewModel = viewModel()) {
     OfflineWalkieTalkieTheme(outdoorMode = isOutdoorMode) {
         NavDisplay(
             backStack = backStack,
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
             entryProvider = entryProvider {
                 entry<Permissions> {
                     PermissionScreen(

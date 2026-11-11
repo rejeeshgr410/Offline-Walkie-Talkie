@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.util.Log
 import com.example.offlinewalkietalkie.transport.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
@@ -25,6 +26,7 @@ import java.util.UUID
 class BluetoothClassicTransport(private val context: Context) : Transport {
 
     companion object {
+        private const val TAG = "TL/BtClassic"
         private const val APP_NAME = "OfflineWalkieTalkie"
         private val APP_UUID: UUID = UUID.fromString("1f2a3b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c")
     }
@@ -86,7 +88,15 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
         
         _state.value = TransportState.ACTIVE
         val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
-        context.registerReceiver(discoveryReceiver, filter)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(discoveryReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(discoveryReceiver, filter)
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Failed to register discoveryReceiver", e)
+        }
         bluetoothAdapter.startDiscovery()
     }
 

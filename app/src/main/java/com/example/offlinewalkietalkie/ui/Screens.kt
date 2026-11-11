@@ -377,8 +377,7 @@ fun HomeScreen(
 
                 // Pending Pairing Request Banner (Apple Security Modal in Dashboard)
                 val pendingRequest by viewModel.pendingRequest.collectAsState()
-                if (pendingRequest != null) {
-                    val req = pendingRequest!!
+                pendingRequest?.let { req ->
                     Card(
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(containerColor = AppleCardSurface),
@@ -1622,8 +1621,9 @@ fun PairingScreen(
                             textAlign = TextAlign.Center
                         )
                     } else {
+                        val req = request ?: return@Column
                         Text(
-                            text = "Pairing with ${request!!.peerName}",
+                            text = "Pairing with ${req.peerName}",
                             style = AppleHeadline,
                             fontSize = 17.sp
                         )
@@ -1638,7 +1638,7 @@ fun PairingScreen(
                                 .padding(horizontal = 24.dp, vertical = 12.dp)
                         ) {
                             Text(
-                                text = request!!.authCode,
+                                text = req.authCode,
                                 style = AppleLargeTitle.copy(
                                     color = Color(0xFFE60023),
                                     fontSize = 36.sp,
@@ -1663,7 +1663,7 @@ fun PairingScreen(
                             Button(
                                 onClick = {
                                     accepted = true
-                                    viewModel.acceptConnection(request!!.peerId)
+                                    viewModel.acceptConnection(req.peerId)
                                 },
                                 modifier = Modifier
                                     .weight(1f)
@@ -1682,7 +1682,7 @@ fun PairingScreen(
                             }
                             OutlinedButton(
                                 onClick = {
-                                    viewModel.rejectConnection(request!!.peerId)
+                                    viewModel.rejectConnection(req.peerId)
                                     onBack()
                                 },
                                 modifier = Modifier
@@ -1729,6 +1729,13 @@ fun SettingsScreen(
     val isVolumePtt by viewModel.isVolumeKeyPttEnabled.collectAsState()
     val isScoActive by viewModel.isBluetoothScoActive.collectAsState()
     val context = LocalContext.current
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            isBatteryExempt = viewModel.isBatteryOptimizationIgnored()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -2190,10 +2197,8 @@ fun SettingsScreen(
                                 .fillMaxWidth()
                                 .clickable {
                                     if (!isBatteryExempt) {
-                                        try {
-                                            context.startActivity(viewModel.getBatteryOptimizationIntent())
-                                            isBatteryExempt = viewModel.isBatteryOptimizationIgnored()
-                                        } catch (e: Exception) {}
+                                        viewModel.requestBatteryOptimization(context)
+                                        isBatteryExempt = viewModel.isBatteryOptimizationIgnored()
                                     }
                                 }
                                 .padding(vertical = 4.dp),
@@ -2229,10 +2234,8 @@ fun SettingsScreen(
                             if (!isBatteryExempt) {
                                 Button(
                                     onClick = {
-                                        try {
-                                            context.startActivity(viewModel.getBatteryOptimizationIntent())
-                                            isBatteryExempt = viewModel.isBatteryOptimizationIgnored()
-                                        } catch (e: Exception) {}
+                                        viewModel.requestBatteryOptimization(context)
+                                        isBatteryExempt = viewModel.isBatteryOptimizationIgnored()
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = AppleSystemOrange, contentColor = Color.White),
                                     shape = RoundedCornerShape(8.dp),

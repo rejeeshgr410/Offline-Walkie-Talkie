@@ -2,6 +2,7 @@ package com.example.offlinewalkietalkie.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -37,70 +38,260 @@ import com.example.offlinewalkietalkie.ui.components.GlassSurface
 import kotlinx.coroutines.delay
 
 /**
- * Apple Maps-inspired Discover Map Screen for shared peer locations.
+ * Apple Maps & Find My-inspired Discover Map Screen for shared peer locations and offline GPS telemetry.
  */
 @Composable
 fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
     val locations by viewModel.peerLocations.collectAsState()
     val currentLocation by viewModel.currentLocation.collectAsState()
+    val heading by viewModel.deviceHeading.collectAsState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshLocation()
+        while (true) {
+            delay(1500)
+            now = System.currentTimeMillis()
+            viewModel.refreshLocation()
+        }
+    }
+
+    val infinitePulse = rememberInfiniteTransition(label = "gps_beacon_pulse")
+    val pulseRadius by infinitePulse.animateFloat(
+        initialValue = 10f,
+        targetValue = 28f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pulse_radius"
+    )
+    val pulseAlpha by infinitePulse.animateFloat(
+        initialValue = 0.5f,
+        targetValue = 0.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pulse_alpha"
+    )
 
     Box(Modifier.fillMaxSize().background(AppleBackground).safeDrawingPadding().imePadding().padding(16.dp)) {
         Column(Modifier.fillMaxSize()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = AppleTextPrimary) }
-                Column {
-                    Text("Discover Map", style = AppleTitle2)
-                    Text("Mesh-shared coordinates from nearby peers", style = AppleFootnote, color = AppleTextSecondary)
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = AppleTextPrimary) }
+                    Column {
+                        Text("Discover Map", style = AppleTitle2)
+                        Text("Offline GPS & Mesh Location Telemetry", style = AppleFootnote, color = AppleTextSecondary)
+                    }
+                }
+                IconButton(onClick = { viewModel.refreshLocation() }) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = "Refresh GPS", tint = AppleSystemBlue)
                 }
             }
-            Spacer(Modifier.height(14.dp))
-            GlassSurface(cornerRadius = 22.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth().height(300.dp)) {
+
+            Spacer(Modifier.height(10.dp))
+
+            // 1. Hero "My Location & GPS Status" Card
+            GlassSurface(cornerRadius = 20.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("MY CURRENT GPS FIX", style = AppleCaption2)
+                        val hasLoc = currentLocation != null
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (hasLoc) AppleSystemGreen else AppleSystemOrange)
+                            )
+                            Text(
+                                text = if (hasLoc) "Locked • ${currentLocation?.provider?.uppercase() ?: "GPS"}" else "Acquiring Satellites…",
+                                style = AppleCaption1,
+                                color = if (hasLoc) AppleSystemGreen else AppleSystemOrange,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    val loc = currentLocation
+                    if (loc != null) {
+                        val latStr = "%.6f° %s".format(kotlin.math.abs(loc.latitude), if (loc.latitude >= 0) "N" else "S")
+                        val lonStr = "%.6f° %s".format(kotlin.math.abs(loc.longitude), if (loc.longitude >= 0) "E" else "W")
+                        Text(
+                            text = "$latStr, $lonStr",
+                            style = AppleTitle2.copy(fontSize = 18.sp),
+                            color = AppleTextPrimary
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            if (loc.hasAccuracy()) {
+                                Text("Accuracy: ±${"%.1f".format(loc.accuracy)}m", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
+                            }
+                            if (loc.hasAltitude()) {
+                                Text("Alt: ${loc.altitude.toInt()}m", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
+                            }
+                            Text("Heading: ${heading.toInt()}°", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
+                        }
+                    } else {
+                        Text(
+                            text = "Waiting for GPS satellite fix…",
+                            style = AppleHeadline,
+                            color = AppleTextSecondary
+                        )
+                        Text(
+                            text = "Native satellite tracking active. Works 100% offline with zero internet.",
+                            style = AppleCaption1,
+                            color = AppleTextTertiary
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // 2. Interactive Schematic Tactical Map Canvas
+            GlassSurface(cornerRadius = 22.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth().height(260.dp)) {
                 Canvas(Modifier.fillMaxSize().padding(12.dp)) {
-                    val grid = Color(0x1A0A84FF)
-                    for (i in 1..5) {
-                        val x = size.width * i / 6f; val y = size.height * i / 6f
-                        drawLine(grid, Offset(x, 0f), Offset(x, size.height), 1f)
-                        drawLine(grid, Offset(0f, y), Offset(size.width, y), 1f)
+                    val canvasW = size.width
+                    val canvasH = size.height
+                    val centerPt = Offset(canvasW / 2f, canvasH / 2f)
+
+                    // Concentric Tactical Distance Rings
+                    val ringRadii = listOf(canvasW * 0.15f, canvasW * 0.28f, canvasW * 0.42f)
+                    val ringColor = Color(0x180A84FF)
+                    ringRadii.forEach { r ->
+                        drawCircle(ringColor, radius = r, center = centerPt, style = androidx.compose.ui.graphics.drawscope.Stroke(1.2f))
                     }
-                    val points = locations.values.filterNot { it.latitude == 0.0 && it.longitude == 0.0 }
-                    val latitudes = points.map { it.latitude } + listOfNotNull(currentLocation?.latitude)
-                    val longitudes = points.map { it.longitude } + listOfNotNull(currentLocation?.longitude)
-                    val minLat = (latitudes.minOrNull() ?: 0.0) - 0.002
-                    val maxLat = (latitudes.maxOrNull() ?: 0.0) + 0.002
-                    val minLon = (longitudes.minOrNull() ?: 0.0) - 0.002
-                    val maxLon = (longitudes.maxOrNull() ?: 0.0) + 0.002
-                    points.forEach { peer ->
-                        if (peer.latitude == 0.0 && peer.longitude == 0.0) return@forEach
-                        val x = (size.width * (peer.longitude - minLon) / (maxLon - minLon)).toFloat().coerceIn(16f, size.width - 16f)
-                        val y = (size.height * (maxLat - peer.latitude) / (maxLat - minLat)).toFloat().coerceIn(16f, size.height - 16f)
-                        drawCircle(if (now - peer.timestamp < 120_000L) AppleSystemTeal else AppleSystemOrange, 8f, Offset(x, y))
-                    }
-                    currentLocation?.let { loc ->
-                        val x = (size.width * (loc.longitude - minLon) / (maxLon - minLon)).toFloat().coerceIn(16f, size.width - 16f)
-                        val y = (size.height * (maxLat - loc.latitude) / (maxLat - minLat)).toFloat().coerceIn(16f, size.height - 16f)
-                        drawCircle(Color(0xFFE60023), 7f, Offset(x, y))
-                        drawCircle(Color(0xFFE60023).copy(alpha = 0.35f), 13f, Offset(x, y), style = androidx.compose.ui.graphics.drawscope.Stroke(1.5f))
+
+                    // Tactical Crosshairs
+                    drawLine(ringColor, Offset(centerPt.x, 0f), Offset(centerPt.x, canvasH), strokeWidth = 1f)
+                    drawLine(ringColor, Offset(0f, centerPt.y), Offset(canvasW, centerPt.y), strokeWidth = 1f)
+
+                    val myLoc = currentLocation
+                    val validPeers = locations.values.filter { it.latitude != 0.0 && it.longitude != 0.0 }
+
+                    if (myLoc != null) {
+                        // Draw User Pulsing Beacon
+                        drawCircle(AppleSystemBlue.copy(alpha = pulseAlpha), radius = pulseRadius, center = centerPt)
+                        drawCircle(AppleSystemBlue, radius = 7f, center = centerPt)
+                        drawCircle(Color.White, radius = 3.5f, center = centerPt)
+
+                        // Draw Heading Directional Pointer Line
+                        val headingRad = Math.toRadians((heading - 90f).toDouble())
+                        val ptrLen = 32f
+                        val ptrX = centerPt.x + ptrLen * kotlin.math.cos(headingRad).toFloat()
+                        val ptrY = centerPt.y + ptrLen * kotlin.math.sin(headingRad).toFloat()
+                        drawLine(AppleSystemBlue, centerPt, Offset(ptrX, ptrY), strokeWidth = 2.5f)
+
+                        // Draw Peer Location Blips relative to User
+                        validPeers.forEach { peer ->
+                            val distMeters = com.example.offlinewalkietalkie.radar.RadarMath.haversineDistance(
+                                myLoc.latitude, myLoc.longitude,
+                                peer.latitude, peer.longitude
+                            )
+                            val bearing = com.example.offlinewalkietalkie.radar.RadarMath.initialBearing(
+                                myLoc.latitude, myLoc.longitude,
+                                peer.latitude, peer.longitude
+                            )
+                            val relAngle = com.example.offlinewalkietalkie.radar.RadarMath.relativeBearing(heading, bearing)
+                            val rad = Math.toRadians((relAngle - 90f).toDouble())
+
+                            // Scale: 2000 meters maps to outer ring radius
+                            val maxVisualRange = 2000.0
+                            val scaleFraction = (distMeters / maxVisualRange).coerceIn(0.12, 0.95).toFloat()
+                            val blipRadius = ringRadii.last() * scaleFraction
+                            val blipX = (centerPt.x + blipRadius * kotlin.math.cos(rad).toFloat()).coerceIn(16f, canvasW - 16f)
+                            val blipY = (centerPt.y + blipRadius * kotlin.math.sin(rad).toFloat()).coerceIn(16f, canvasH - 16f)
+
+                            val isFresh = (now - peer.timestamp) < 120_000L
+                            val dotColor = if (isFresh) AppleSystemTeal else AppleSystemOrange
+                            drawCircle(dotColor.copy(alpha = 0.3f), radius = 12f, center = Offset(blipX, blipY))
+                            drawCircle(dotColor, radius = 6f, center = Offset(blipX, blipY))
+                            drawCircle(Color.White, radius = 2.5f, center = Offset(blipX, blipY))
+                        }
+                    } else {
+                        // User GPS not yet locked: draw scanning radar sweep indicator
+                        drawCircle(AppleSystemOrange.copy(alpha = 0.25f), radius = 22f, center = centerPt)
+                        drawCircle(AppleSystemOrange, radius = 6f, center = centerPt)
                     }
                 }
             }
-            Text("Schematic coordinate grid • Cyan is recent, amber is stale, red is you", style = AppleCaption1, color = AppleTextTertiary, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
-            Spacer(Modifier.height(8.dp))
+
+            Text(
+                text = "Concentric radar ranges: 250m • 500m • 1km • Blue is you, Cyan is active mesh peers",
+                style = AppleCaption1,
+                color = AppleTextTertiary,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            // 3. Discovered Peers List
             if (locations.isEmpty()) {
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    Text("No peers have shared a location yet.\nEnable GPS and connect to nearby devices to see them here.", style = AppleFootnote, color = AppleTextTertiary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "No peers sharing location yet",
+                            style = AppleHeadline,
+                            color = AppleTextSecondary
+                        )
+                        Text(
+                            text = "When connected via Bluetooth walkie-talkie,\npeers automatically appear on this tactical map.",
+                            style = AppleFootnote,
+                            color = AppleTextTertiary,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
                 }
-            } else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
-                items(locations.values.toList(), key = { it.peerId }) { peer ->
-                    val age = (now - peer.timestamp).coerceAtLeast(0L)
-                    GlassSurface(cornerRadius = 16.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
-                        Row(Modifier.padding(14.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column {
-                                Text(peer.peerName, style = AppleHeadline)
-                                Text("${"%.5f".format(peer.latitude)}, ${"%.5f".format(peer.longitude)}", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
+                    items(locations.values.toList(), key = { it.peerId }) { peer ->
+                        val age = (now - peer.timestamp).coerceAtLeast(0L)
+                        val myLoc = currentLocation
+                        val distStr = if (myLoc != null && peer.latitude != 0.0) {
+                            val d = com.example.offlinewalkietalkie.radar.RadarMath.haversineDistance(
+                                myLoc.latitude, myLoc.longitude,
+                                peer.latitude, peer.longitude
+                            )
+                            if (d >= 1000.0) "%.1f km away".format(d / 1000.0) else "${d.toInt()} m away"
+                        } else null
+
+                        GlassSurface(cornerRadius = 16.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                Modifier.padding(14.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(peer.peerName, style = AppleHeadline)
+                                    Text(
+                                        text = "${"%.5f".format(peer.latitude)}°, ${"%.5f".format(peer.longitude)}°",
+                                        style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary)
+                                    )
+                                    if (distStr != null) {
+                                        Text(distStr, style = AppleCaption1, color = AppleSystemBlue, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                                Text(
+                                    text = if (age < 120_000L) "Live • ${age / 1000}s" else "Updated ${age / 60_000}m ago",
+                                    style = AppleCaption1,
+                                    color = if (age < 120_000L) AppleSystemGreen else AppleSystemOrange,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                             }
-                            Text(if (age < 120_000L) "Live • ${age / 1000}s" else "Updated ${age / 60_000}m ago", style = AppleCaption1, color = if (age < 120_000L) AppleSystemGreen else AppleSystemOrange)
                         }
                     }
                 }

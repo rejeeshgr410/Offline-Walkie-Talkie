@@ -35,6 +35,9 @@ class AudioCapture(
     private var gainControl: AutomaticGainControl? = null
     private val limiter = AudioLimiter(sampleRate = sampleRate)
 
+    @Volatile
+    var isCapturing: Boolean = false
+
     private val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, CHANNEL_CONFIG, AUDIO_FORMAT)
     // 20ms frames: sampleRate * 0.02 sec samples
     private val samplesPerFrame = (sampleRate * 0.02).toInt()
@@ -42,6 +45,20 @@ class AudioCapture(
 
     @SuppressLint("MissingPermission")
     fun start(onFrame: (ByteArray) -> Unit) {
+        isCapturing = true
+
+        // Instant reuse if AudioRecord is already warm
+        if (audioRecord != null && audioRecord?.state == AudioRecord.STATE_INITIALIZED) {
+            if (audioRecord?.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                try {
+                    audioRecord?.startRecording()
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Error starting warm AudioRecord", e)
+                }
+            }
+            return
+        }
+
         val bufferSize = maxOf(minBufferSize * 4, frameSize * 10)
 
         audioRecord = AudioRecord(
@@ -88,7 +105,11 @@ class AudioCapture(
             } catch (e: Throwable) {}
         }
 
-        audioRecord?.startRecording()
+        try {
+            audioRecord?.startRecording()
+        } catch (e: Throwable) {
+            Log.e(TAG, "Error in audioRecord.startRecording", e)
+        }
     }
 
     suspend fun captureLoop(onFrame: (ByteArray) -> Unit) = withContext(Dispatchers.IO) {
@@ -99,6 +120,12 @@ class AudioCapture(
         while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
             val read = audioRecord?.read(readBuffer, 0, frameSize, AudioRecord.READ_BLOCKING) ?: 0
             if (read > 0) {
+                if (!isCapturing) {
+                    // In standby between PTT presses: continuously drain hardware audio buffer
+                    // so there is zero stale audio backlog when PTT is pressed next.
+                    accumulationBuffer = ByteArray(0)
+                    continue
+                }
                 accumulationBuffer += readBuffer.copyOfRange(0, read)
                 while (accumulationBuffer.size >= frameSize) {
                     val frame = accumulationBuffer.copyOfRange(0, frameSize)
@@ -117,6 +144,12 @@ class AudioCapture(
     }
 
     fun stop() {
+        // Instant PTT release: mute capture loop immediately
+        isCapturing = false
+    }
+
+    fun release() {
+        isCapturing = false
         try {
             audioRecord?.stop()
         } catch (e: Throwable) {}
@@ -134,7 +167,9 @@ class AudioCapture(
         noiseSuppressor = null
         gainControl = null
 
-        audioRecord?.release()
+        try {
+            audioRecord?.release()
+        } catch (e: Throwable) {}
         audioRecord = null
     }
 }

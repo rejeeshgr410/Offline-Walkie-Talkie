@@ -1,6 +1,7 @@
 package com.example.offlinewalkietalkie.ui
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
@@ -248,6 +249,9 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     private val _selectedRadarPeerId = MutableStateFlow<String?>(null)
     val selectedRadarPeerId = _selectedRadarPeerId.asStateFlow()
+
+    // Deduplication cache for incoming text messages (retains up to 1000 latest packet keys)
+    private val seenTextMessageKeys = java.util.Collections.synchronizedSet(java.util.LinkedHashSet<String>())
 
     // --- 3. Offline Voice Message History & Replay ---
     val voiceHistoryManager = VoiceHistoryManager(application)
@@ -576,33 +580,54 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                 }
                 FrameType.TEXT -> {
                     val peerName = _peers.value.find { it.id == peerId }?.name ?: "Peer"
-                    val content: String? = if (decodedFrame.isEncrypted() && decodedFrame.authTag != null) {
-                        val nonce = generateNonce(decodedFrame.sessionId, decodedFrame.sequence)
-                        val dummyForAad = decodedFrame.copy(hopLimit = 0)
-                        val headerAad = dummyForAad.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
-                        val decrypted = cryptoManager.decrypt(peerId, decodedFrame.payload, decodedFrame.authTag, nonce, headerAad)
-                        decrypted?.let { String(it, Charsets.UTF_8) }
-                    } else null
+                    val msgKey = "${decodedFrame.sessionId}:${decodedFrame.sequence}"
 
-                    if (content != null) {
-                        Log.i(TAG, "Received authenticated encrypted TEXT from $peerName seq=${decodedFrame.sequence} (len=${content.length})")
-                        val msg = TextMessage(
-                            sequence = decodedFrame.sequence,
-                            senderMemberId = decodedFrame.sessionId,
-                            senderName = peerName,
-                            content = content,
-                            status = TextDeliveryStatus.DELIVERED
-                        )
-                        _textMessages.value = _textMessages.value + msg
-                        val ack = Frame(
-                            type = FrameType.ACK,
-                            sequence = decodedFrame.sequence,
-                            sessionId = decodedFrame.sessionId,
-                            timestamp = System.currentTimeMillis().toInt()
-                        )
-                        transport.send(peerId, ack.toBytes())
+                    val isDuplicate = synchronized(seenTextMessageKeys) {
+                        if (seenTextMessageKeys.contains(msgKey)) {
+                            true
+                        } else {
+                            if (seenTextMessageKeys.size > 1000) {
+                                val it = seenTextMessageKeys.iterator()
+                                if (it.hasNext()) { it.next(); it.remove() }
+                            }
+                            seenTextMessageKeys.add(msgKey)
+                            false
+                        }
+                    }
+
+                    // Acknowledge receipt to peer
+                    val ack = Frame(
+                        type = FrameType.ACK,
+                        sequence = decodedFrame.sequence,
+                        sessionId = decodedFrame.sessionId,
+                        timestamp = System.currentTimeMillis().toInt()
+                    )
+                    transport.send(peerId, ack.toBytes())
+
+                    if (isDuplicate) {
+                        Log.i(TAG, "Duplicate text message $msgKey from $peerName received; dropped from UI, ACK sent")
                     } else {
-                        Log.w(TAG, "Dropping unauthenticated or unencrypted TEXT from $peerId seq=${decodedFrame.sequence}")
+                        val content: String? = if (decodedFrame.isEncrypted() && decodedFrame.authTag != null) {
+                            val nonce = generateNonce(decodedFrame.sessionId, decodedFrame.sequence)
+                            val dummyForAad = decodedFrame.copy(hopLimit = 0)
+                            val headerAad = dummyForAad.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
+                            val decrypted = cryptoManager.decrypt(peerId, decodedFrame.payload, decodedFrame.authTag, nonce, headerAad)
+                            decrypted?.let { String(it, Charsets.UTF_8) }
+                        } else null
+
+                        if (content != null) {
+                            Log.i(TAG, "Received authenticated encrypted TEXT from $peerName seq=${decodedFrame.sequence} (len=${content.length})")
+                            val msg = TextMessage(
+                                sequence = decodedFrame.sequence,
+                                senderMemberId = decodedFrame.sessionId,
+                                senderName = peerName,
+                                content = content,
+                                status = TextDeliveryStatus.DELIVERED
+                            )
+                            _textMessages.value = _textMessages.value + msg
+                        } else {
+                            Log.w(TAG, "Dropping unauthenticated or unencrypted TEXT from $peerId seq=${decodedFrame.sequence}")
+                        }
                     }
                 }
                 FrameType.ACK -> {
@@ -1393,7 +1418,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     fun sendTextMessage(content: String) {
         val seq = controlSequence.getAndIncrement()
-        val connectedPeers = _peers.value.filter { it.isConnected }
+        val connectedPeers = _peers.value.filter { it.isConnected }.distinctBy { it.name }
         Log.i(TAG, "sendTextMessage (len=${content.length}) to ${connectedPeers.size} peer(s)")
         val textMsg = TextMessage(
             sequence = seq,
@@ -1659,6 +1684,11 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    fun refreshLocation() {
+        locationProvider.refreshLocation()
+        locationProvider.startTracking()
+    }
+
     fun stopReplay() {
         voiceHistoryManager.stopReplay()
         instantReplayBuffer.stop()
@@ -1666,6 +1696,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     fun isBatteryOptimizationIgnored(): Boolean = hardwarePttManager.isBatteryOptimizationIgnored()
     fun getBatteryOptimizationIntent(): Intent = hardwarePttManager.createBatteryOptimizationIntent()
+    fun requestBatteryOptimization(context: Context) = hardwarePttManager.requestBatteryOptimization(context)
 
     fun setVolumeKeyPttEnabled(enabled: Boolean) {
         hardwarePttManager.setVolumeKeyPttEnabled(enabled)

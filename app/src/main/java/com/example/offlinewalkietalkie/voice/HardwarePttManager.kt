@@ -61,6 +61,37 @@ class HardwarePttManager(
     }
 
     /**
+     * Resiliently requests battery optimization exemption with multi-tier OEM fallbacks.
+     */
+    fun requestBatteryOptimization(targetContext: Context = context) {
+        try {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:${targetContext.packageName}")
+            }
+            if (targetContext !is android.app.Activity) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            targetContext.startActivity(intent)
+        } catch (e: Throwable) {
+            Log.w(TAG, "Direct ignore battery prompt failed, trying system list fallback", e)
+            try {
+                val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                    if (targetContext !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                targetContext.startActivity(fallback)
+            } catch (e2: Throwable) {
+                try {
+                    val appSettings = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.parse("package:${targetContext.packageName}")
+                        if (targetContext !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    targetContext.startActivity(appSettings)
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    /**
      * Intercepts key down events.
      * @return true if event was consumed (prevents Android system volume change).
      */

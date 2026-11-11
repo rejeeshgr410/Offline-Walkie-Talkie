@@ -146,7 +146,11 @@ class BleGattTransport(private val context: Context) : Transport {
     init {
         try {
             val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
-            context.registerReceiver(bluetoothStateReceiver, filter)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(bluetoothStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(bluetoothStateReceiver, filter)
+            }
         } catch (e: Throwable) {
             Log.w(TAG, "Could not register bluetoothStateReceiver", e)
         }
@@ -301,10 +305,11 @@ class BleGattTransport(private val context: Context) : Transport {
                     )
                     peerAuthCodes[address] = code
 
-                    // Transmit Lean TYPE_CONNECT_REQ carrying this exact code to the peer
+                    // Transmit Lean TYPE_CONNECT_REQ carrying this exact code and localDisplayName to the peer
+                    val payloadStr = "$code|$localDisplayName"
                     val connectReqPacket = VivoLeanProtocol.encode(
                         type = VivoLeanProtocol.TYPE_CONNECT_REQ,
-                        payload = code.toByteArray(Charsets.UTF_8)
+                        payload = payloadStr.toByteArray(Charsets.UTF_8)
                     )
                     coroutineScope.launch {
                         delay(250)
@@ -442,8 +447,14 @@ class BleGattTransport(private val context: Context) : Transport {
             val isConn = clientGatts.containsKey(address) || serverConnectedDevices.containsKey(address)
             addOrUpdatePeer(address, name, isConnected = isConn)
 
+            // Prevent duplicate connections if we already have an active connected link to this device name
+            val isKnownName = !name.startsWith("TalkLoop") && !name.startsWith("Peer ") && !name.startsWith("Walkie-Talkie")
+            val hasActiveConnected = isKnownName && _peers.value.values.any {
+                it.name.equals(name, ignoreCase = true) && it.isConnected && it.id != address
+            }
+
             // Auto-connect to discovered TalkLoop device during active symmetric discovery
-            if (!isConn && !connectingAddresses.contains(address) && !intentionallyDisconnectedPeers.contains(address)) {
+            if (!isConn && !hasActiveConnected && !connectingAddresses.contains(address) && !intentionallyDisconnectedPeers.contains(address)) {
                 connectingAddresses.add(address)
                 coroutineScope.launch {
                     Log.i(TAG, "Connecting GATT to discovered TalkLoop peer $name ($address)")
@@ -463,11 +474,28 @@ class BleGattTransport(private val context: Context) : Transport {
     private fun addOrUpdatePeer(address: String, name: String, isConnected: Boolean) {
         val current = _peers.value.toMutableMap()
         val existing = current[address]
-        val cleanName = if ((name.startsWith("TalkLoop") || name.startsWith("Walkie-Talkie")) && existing != null && !existing.name.startsWith("TalkLoop") && !existing.name.startsWith("Walkie-Talkie")) {
+        val cleanName = if ((name.startsWith("TalkLoop") || name.startsWith("Walkie-Talkie") || name.startsWith("Peer ")) &&
+            existing != null && !existing.name.startsWith("TalkLoop") && !existing.name.startsWith("Walkie-Talkie") && !existing.name.startsWith("Peer ")) {
             existing.name
         } else {
             name
         }
+
+        // Deduplicate peers by device identity name:
+        // If a known non-generic name (e.g. "Pixel 6") already exists under a stale MAC address,
+        // prune the stale MAC address so each physical phone appears exactly once.
+        val isGeneric = cleanName.startsWith("TalkLoop") || cleanName.startsWith("Walkie-Talkie") || cleanName.startsWith("Peer ")
+        if (!isGeneric) {
+            val duplicateAddresses = current.filter { it.key != address && it.value.name.equals(cleanName, ignoreCase = true) }.keys
+            duplicateAddresses.forEach { dupAddr ->
+                Log.i(TAG, "Pruning duplicate peer address $dupAddr for device '$cleanName' in favor of $address")
+                current.remove(dupAddr)
+                clientGatts.remove(dupAddr)?.let { try { it.close() } catch (_: Throwable) {} }
+                serverConnectedDevices.remove(dupAddr)
+                cancelReconnect(dupAddr)
+            }
+        }
+
         val isAuth = if (isConnected) (existing?.isAuthenticated ?: false) else false
         current[address] = Peer(id = address, name = cleanName, isConnected = isConnected, isAuthenticated = isAuth)
         _peers.value = current
@@ -568,16 +596,20 @@ class BleGattTransport(private val context: Context) : Transport {
             if (packet != null) {
                 when (packet.type) {
                     VivoLeanProtocol.TYPE_CONNECT_REQ -> {
-                        val receivedCode = if (packet.payload.isNotEmpty()) {
+                        val rawPayload = if (packet.payload.isNotEmpty()) {
                             String(packet.payload, Charsets.UTF_8).trim()
-                        } else null
-                        if (!receivedCode.isNullOrBlank() && receivedCode.length == 6) {
+                        } else ""
+                        val parts = rawPayload.split("|", limit = 2)
+                        val receivedCode = parts[0]
+                        val remotePeerName = if (parts.size > 1 && parts[1].isNotBlank()) parts[1] else null
+
+                        if (receivedCode.isNotBlank() && receivedCode.length == 6) {
                             val currentCode = peerAuthCodes[address]
                             val finalCode = if (currentCode != null && currentCode < receivedCode) {
                                 // Deterministic tie-breaker: tell peer to use our lower code
                                 val reply = VivoLeanProtocol.encode(
                                     type = VivoLeanProtocol.TYPE_CONNECT_REQ,
-                                    payload = currentCode.toByteArray(Charsets.UTF_8)
+                                    payload = "$currentCode|$localDisplayName".toByteArray(Charsets.UTF_8)
                                 )
                                 coroutineScope.launch { writeRawPacket(address, reply) }
                                 currentCode
@@ -585,8 +617,9 @@ class BleGattTransport(private val context: Context) : Transport {
                                 peerAuthCodes[address] = receivedCode
                                 receivedCode
                             }
-                            val peerName = _peers.value[address]?.name ?: "TalkLoop ${address.takeLast(5)}"
-                            Log.i(TAG, "Synchronized authCode $finalCode with $address")
+                            val peerName = remotePeerName ?: _peers.value[address]?.name ?: "TalkLoop ${address.takeLast(5)}"
+                            addOrUpdatePeer(address, peerName, isConnected = true)
+                            Log.i(TAG, "Synchronized authCode $finalCode with $address ($peerName)")
                             _connectionRequests.tryEmit(
                                 ConnectionRequest(
                                     peerId = address,

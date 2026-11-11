@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import android.os.Build
 import android.util.Log
 import com.example.offlinewalkietalkie.protocol.PeerTelemetry
 import kotlinx.coroutines.CoroutineScope
@@ -74,7 +75,11 @@ class TelemetryManager(
         if (!isReceiverRegistered) {
             try {
                 val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-                context.registerReceiver(batteryReceiver, filter)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.registerReceiver(batteryReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    context.registerReceiver(batteryReceiver, filter)
+                }
                 isReceiverRegistered = true
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to register battery receiver", e)

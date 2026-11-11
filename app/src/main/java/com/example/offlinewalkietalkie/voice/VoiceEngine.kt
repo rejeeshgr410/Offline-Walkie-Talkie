@@ -79,6 +79,10 @@ class VoiceEngine(
     fun startRecording(onEncodedFrame: (sequence: Int, frame: ByteArray) -> Unit) {
         routeManager?.requestAudioFocus()
         capture.start { }
+        this.currentOnEncodedFrame = onEncodedFrame
+        if (captureJob?.isActive == true) {
+            return
+        }
         captureJob = coroutineScope.launch {
             var frameCount = 0
             var pendingCodec2Pcm: ShortArray? = null
@@ -117,7 +121,7 @@ class VoiceEngine(
                             val codecType = if (codec is Codec2AudioCodec) AudioCodecType.CODEC2 else AudioCodecType.AMR_NB
                             handleIncomingFrame("local", sequenceNumber, encoded, codecType, System.currentTimeMillis())
                         } else {
-                            onEncodedFrame(sequenceNumber, encoded)
+                            currentOnEncodedFrame?.invoke(sequenceNumber, encoded)
                         }
                     }
                 } catch (e: Exception) {
@@ -128,9 +132,16 @@ class VoiceEngine(
         }
     }
 
+    private var currentOnEncodedFrame: ((sequence: Int, frame: ByteArray) -> Unit)? = null
+
     fun stopRecording() {
-        captureJob?.cancel()
         capture.stop()
+    }
+
+    fun release() {
+        captureJob?.cancel()
+        capture.release()
+        stopPlayback()
     }
 
     var speakerphoneEnabled: Boolean = true

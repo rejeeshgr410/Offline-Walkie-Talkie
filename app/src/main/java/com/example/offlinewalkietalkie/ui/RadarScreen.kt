@@ -67,16 +67,17 @@ fun RadarScreen(
         peerLocations.values.firstOrNull()
     }
 
-    val distanceMeters = if (myLocation != null && targetPeer != null && targetPeer.latitude != 0.0) {
+    val loc = myLocation
+    val distanceMeters = if (loc != null && targetPeer != null && targetPeer.latitude != 0.0) {
         RadarMath.haversineDistance(
-            myLocation!!.latitude, myLocation!!.longitude,
+            loc.latitude, loc.longitude,
             targetPeer.latitude, targetPeer.longitude
         )
     } else null
 
-    val targetBearing = if (myLocation != null && targetPeer != null && targetPeer.latitude != 0.0) {
+    val targetBearing = if (loc != null && targetPeer != null && targetPeer.latitude != 0.0) {
         RadarMath.initialBearing(
-            myLocation!!.latitude, myLocation!!.longitude,
+            loc.latitude, loc.longitude,
             targetPeer.latitude, targetPeer.longitude
         )
     } else null
@@ -134,8 +135,9 @@ fun RadarScreen(
                             Text(
                                 text = when {
                                     targetPeer == null -> "Waiting for shared GPS beacons"
-                                    locationIsFresh -> "Live • Updated ${peerLocationAgeMs!! / 1000}s ago"
-                                    else -> "Cached • Updated ${peerLocationAgeMs!! / 60_000}m ago"
+                                    locationIsFresh && peerLocationAgeMs != null -> "Live • Updated ${peerLocationAgeMs / 1000}s ago"
+                                    peerLocationAgeMs != null -> "Cached • Updated ${peerLocationAgeMs / 60_000}m ago"
+                                    else -> "Cached beacon"
                                 },
                                 style = AppleFootnote,
                                 color = if (locationIsFresh) AppleSystemGreen else AppleSystemOrange
@@ -236,15 +238,15 @@ fun RadarScreen(
                     drawCircle(color = AppleSystemRed, radius = 3.5f, center = Offset(northX, northY))
 
                     // Draw peer blips
-                    if (myLocation != null) {
+                    if (loc != null) {
                         peerLocations.values.forEach { peer ->
                             if (peer.latitude != 0.0) {
                                 val d = RadarMath.haversineDistance(
-                                    myLocation!!.latitude, myLocation!!.longitude,
+                                    loc.latitude, loc.longitude,
                                     peer.latitude, peer.longitude
                                 )
                                 val b = RadarMath.initialBearing(
-                                    myLocation!!.latitude, myLocation!!.longitude,
+                                    loc.latitude, loc.longitude,
                                     peer.latitude, peer.longitude
                                 )
                                 val rel = RadarMath.relativeBearing(heading, b)

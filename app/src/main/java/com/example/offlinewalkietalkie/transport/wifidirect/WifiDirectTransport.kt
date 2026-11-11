@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.wifi.p2p.*
+import android.os.Build
 import android.os.Looper
 import com.example.offlinewalkietalkie.transport.*
 import kotlinx.coroutines.*
@@ -87,17 +88,27 @@ class WifiDirectTransport(private val context: Context) : Transport {
         }
     }
 
+    private fun safeRegisterReceiver() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, intentFilter)
+            }
+        } catch (_: Throwable) {}
+    }
+
     override suspend fun startAdvertising(identity: LocalIdentity) {
         if (manager == null || channel == null) return
         _state.value = TransportState.ACTIVE
-        context.registerReceiver(receiver, intentFilter)
+        safeRegisterReceiver()
         manager.discoverPeers(channel, null)
     }
 
     override suspend fun startDiscovery(identity: LocalIdentity) {
         if (manager == null || channel == null) return
         _state.value = TransportState.ACTIVE
-        context.registerReceiver(receiver, intentFilter)
+        safeRegisterReceiver()
         manager.discoverPeers(channel, null)
     }
 

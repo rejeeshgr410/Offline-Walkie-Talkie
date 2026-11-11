@@ -113,7 +113,15 @@ class AudioRouteManager(private val context: Context) {
             addAction(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
             addAction(Intent.ACTION_HEADSET_PLUG)
         }
-        context.registerReceiver(audioReceiver, filter)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(audioReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(audioReceiver, filter)
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Failed to register audioReceiver", e)
+        }
         refreshAvailableRoutes()
     }
 

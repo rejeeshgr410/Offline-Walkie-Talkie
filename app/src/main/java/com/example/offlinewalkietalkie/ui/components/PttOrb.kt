@@ -3,7 +3,8 @@ package com.example.offlinewalkietalkie.ui.components
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -156,20 +157,24 @@ fun PttOrb(
                         PttReadyBrush
                     }
                 )
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onPress = {
-                            if (!heldByOther) {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                isPressed = true
-                                onPressStart()
-                                tryAwaitRelease()
-                                isPressed = false
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                onPressEnd()
-                            }
+                .pointerInput(heldByOther) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (heldByOther) return@awaitEachGesture
+                        down.consume()
+                        isPressed = true
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onPressStart()
+
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val anyPressed = event.changes.any { it.pressed }
+                            if (!anyPressed) break
                         }
-                    )
+                        isPressed = false
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onPressEnd()
+                    }
                 }
         ) {
             Column(
