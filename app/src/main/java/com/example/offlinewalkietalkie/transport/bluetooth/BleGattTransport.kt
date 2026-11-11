@@ -16,6 +16,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -111,6 +112,9 @@ class BleGattTransport(private val context: Context) : Transport {
     private var gattServer: BluetoothGattServer? = null
     private var serverCharacteristic: BluetoothGattCharacteristic? = null
 
+    // Synchronized 6-digit authentication verification codes per peer: peerAddress -> 6-digit code
+    private val peerAuthCodes = ConcurrentHashMap<String, String>()
+
     private var leAdvertiser: BluetoothLeAdvertiser? = null
     private var leScanner: BluetoothLeScanner? = null
     private var localDisplayName: String = Build.MODEL
@@ -158,15 +162,6 @@ class BleGattTransport(private val context: Context) : Transport {
                 cancelReconnect(address)
                 serverConnectedDevices[address] = device
                 addOrUpdatePeer(address, name, isConnected = true)
-
-                // Emit connection request for approval and authentication state machine (§19.3 & P0-03)
-                _connectionRequests.tryEmit(
-                    ConnectionRequest(
-                        peerId = address,
-                        peerName = name,
-                        authCode = address.replace(":", "").takeLast(4)
-                    )
-                )
 
                 // Symmetrical Connection: Connect client back if we haven't already
                 if (!clientGatts.containsKey(address) && !connectingAddresses.contains(address)) {
@@ -299,12 +294,28 @@ class BleGattTransport(private val context: Context) : Transport {
                     val peerName = _peers.value[address]?.name ?: "Peer ${address.takeLast(5)}"
                     addOrUpdatePeer(address, peerName, isConnected = true)
 
-                    // Emit connection request for approval and mutual authentication
+                    // Generate or retrieve the synchronized 6-digit authentication code
+                    val existingCode = peerAuthCodes[address]
+                    val code = existingCode ?: "%06d".format(
+                        java.util.concurrent.ThreadLocalRandom.current().nextInt(100000, 999999)
+                    )
+                    peerAuthCodes[address] = code
+
+                    // Transmit Lean TYPE_CONNECT_REQ carrying this exact code to the peer
+                    val connectReqPacket = VivoLeanProtocol.encode(
+                        type = VivoLeanProtocol.TYPE_CONNECT_REQ,
+                        payload = code.toByteArray(Charsets.UTF_8)
+                    )
+                    coroutineScope.launch {
+                        delay(250)
+                        writeRawPacket(address, connectReqPacket)
+                    }
+
                     _connectionRequests.tryEmit(
                         ConnectionRequest(
                             peerId = address,
                             peerName = peerName,
-                            authCode = address.replace(":", "").takeLast(4)
+                            authCode = code
                         )
                     )
 
@@ -501,11 +512,90 @@ class BleGattTransport(private val context: Context) : Transport {
     private fun handleIncomingBytes(address: String, data: ByteArray) {
         if (data.isEmpty()) return
 
-        // Check for Vivo-style Lean Wire Protocol (pj.e.h / pj.w.i)
+        // 1. First priority: TalkLoop transport framing (single or chunked)
+        if (data[0] == PACKET_TYPE_SINGLE) {
+            val frameBytes = data.copyOfRange(1, data.size)
+            _incomingFrames.tryEmit(IncomingFrame(address, frameBytes))
+            return
+        }
+
+        if (data[0] == PACKET_TYPE_CHUNK) {
+            // Fragmented chunk: [0x01, packetSeq: Byte, chunkIndex: Byte, totalChunks: Byte, payload...]
+            if (data.size < 4) return
+            val packetSeq = data[1].toInt() and 0xFF
+            val chunkIndex = data[2].toInt() and 0xFF
+            val totalChunks = data[3].toInt() and 0xFF
+
+            if (totalChunks <= 0 || totalChunks > 64 || chunkIndex >= totalChunks) {
+                Log.w(TAG, "Malformed chunk header: idx=$chunkIndex total=$totalChunks seq=$packetSeq")
+                return
+            }
+            val chunkPayload = data.copyOfRange(4, data.size)
+
+            val key = "$address:$packetSeq"
+            if (incomingChunkBuffers.size > 32) {
+                val cutoff = System.currentTimeMillis() - 3000
+                incomingChunkBuffers.entries.removeIf { it.value.timestamp < cutoff }
+            }
+
+            val buffer = incomingChunkBuffers.computeIfAbsent(key) { ChunkBuffer(totalChunks) }
+            buffer.chunks[chunkIndex] = chunkPayload
+
+            if (buffer.chunks.size == buffer.totalChunks) {
+                var totalSize = 0
+                for (i in 0 until buffer.totalChunks) {
+                    totalSize += buffer.chunks[i]?.size ?: 0
+                }
+                if (totalSize > 65536) {
+                    Log.w(TAG, "Reassembled frame exceeds size limit ($totalSize bytes)")
+                    incomingChunkBuffers.remove(key)
+                    return
+                }
+
+                val out = ByteArrayOutputStream(totalSize)
+                for (i in 0 until buffer.totalChunks) {
+                    buffer.chunks[i]?.let { out.write(it) }
+                }
+                incomingChunkBuffers.remove(key)
+                _incomingFrames.tryEmit(IncomingFrame(address, out.toByteArray()))
+            }
+            return
+        }
+
+        // 2. Second priority: Raw Vivo-style Lean Wire Protocol control packets (CONNECT_REQ, CODEC_REQ, etc.)
         if (VivoLeanProtocol.isLeanPacket(data)) {
             val packet = VivoLeanProtocol.decode(data)
             if (packet != null) {
                 when (packet.type) {
+                    VivoLeanProtocol.TYPE_CONNECT_REQ -> {
+                        val receivedCode = if (packet.payload.isNotEmpty()) {
+                            String(packet.payload, Charsets.UTF_8).trim()
+                        } else null
+                        if (!receivedCode.isNullOrBlank() && receivedCode.length == 6) {
+                            val currentCode = peerAuthCodes[address]
+                            val finalCode = if (currentCode != null && currentCode < receivedCode) {
+                                // Deterministic tie-breaker: tell peer to use our lower code
+                                val reply = VivoLeanProtocol.encode(
+                                    type = VivoLeanProtocol.TYPE_CONNECT_REQ,
+                                    payload = currentCode.toByteArray(Charsets.UTF_8)
+                                )
+                                coroutineScope.launch { writeRawPacket(address, reply) }
+                                currentCode
+                            } else {
+                                peerAuthCodes[address] = receivedCode
+                                receivedCode
+                            }
+                            val peerName = _peers.value[address]?.name ?: "TalkLoop ${address.takeLast(5)}"
+                            Log.i(TAG, "Synchronized authCode $finalCode with $address")
+                            _connectionRequests.tryEmit(
+                                ConnectionRequest(
+                                    peerId = address,
+                                    peerName = peerName,
+                                    authCode = finalCode
+                                )
+                            )
+                        }
+                    }
                     VivoLeanProtocol.TYPE_AUDIO_FRAME -> {
                         _incomingFrames.tryEmit(IncomingFrame(address, packet.payload))
                     }
@@ -525,58 +615,8 @@ class BleGattTransport(private val context: Context) : Transport {
             }
         }
 
-        when (data[0]) {
-            PACKET_TYPE_SINGLE -> {
-                // Complete unfragmented frame
-                val frameBytes = data.copyOfRange(1, data.size)
-                _incomingFrames.tryEmit(IncomingFrame(address, frameBytes))
-            }
-            PACKET_TYPE_CHUNK -> {
-                // Fragmented chunk: [0x01, packetSeq: Byte, chunkIndex: Byte, totalChunks: Byte, payload...]
-                if (data.size < 4) return
-                val packetSeq = data[1].toInt() and 0xFF
-                val chunkIndex = data[2].toInt() and 0xFF
-                val totalChunks = data[3].toInt() and 0xFF
-
-                if (totalChunks <= 0 || totalChunks > 64 || chunkIndex >= totalChunks) {
-                    Log.w(TAG, "Malformed chunk header: idx=$chunkIndex total=$totalChunks seq=$packetSeq")
-                    return
-                }
-                val chunkPayload = data.copyOfRange(4, data.size)
-
-                val key = "$address:$packetSeq"
-                if (incomingChunkBuffers.size > 32) {
-                    val cutoff = System.currentTimeMillis() - 3000
-                    incomingChunkBuffers.entries.removeIf { it.value.timestamp < cutoff }
-                }
-
-                val buffer = incomingChunkBuffers.computeIfAbsent(key) { ChunkBuffer(totalChunks) }
-                buffer.chunks[chunkIndex] = chunkPayload
-
-                if (buffer.chunks.size == buffer.totalChunks) {
-                    var totalSize = 0
-                    for (i in 0 until buffer.totalChunks) {
-                        totalSize += buffer.chunks[i]?.size ?: 0
-                    }
-                    if (totalSize > 65536) {
-                        Log.w(TAG, "Reassembled frame exceeds size limit ($totalSize bytes)")
-                        incomingChunkBuffers.remove(key)
-                        return
-                    }
-
-                    val out = ByteArrayOutputStream(totalSize)
-                    for (i in 0 until buffer.totalChunks) {
-                        buffer.chunks[i]?.let { out.write(it) }
-                    }
-                    incomingChunkBuffers.remove(key)
-                    _incomingFrames.tryEmit(IncomingFrame(address, out.toByteArray()))
-                }
-            }
-            else -> {
-                // Raw frame (e.g. legacy or direct Frame bytes starting with Frame.MAGIC 0x5754)
-                _incomingFrames.tryEmit(IncomingFrame(address, data))
-            }
-        }
+        // 3. Fallback: Raw unpacketed frame (direct Frame bytes starting with Frame.MAGIC 0x5754)
+        _incomingFrames.tryEmit(IncomingFrame(address, data))
 
         // Clean stale chunk buffers older than 10 seconds
         val now = System.currentTimeMillis()
@@ -789,6 +829,7 @@ class BleGattTransport(private val context: Context) : Transport {
         }
         peerCharacteristics.remove(peerId)
         peerMtus.remove(peerId)
+        peerAuthCodes.remove(peerId)
         serverConnectedDevices.remove(peerId)
         val current = _peers.value.toMutableMap()
         current[peerId]?.let {
