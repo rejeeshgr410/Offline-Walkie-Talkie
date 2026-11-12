@@ -54,3 +54,7 @@ The project is under active development and field validation. Nearby discovery, 
 ## Contributing
 
 Please open an issue with reproducible device, Android-version, and connection-state details before proposing a fix. Do not include APK signing keys, passwords, device identifiers, or private logs in issues or pull requests.
+
+## Maintainer
+
+Maintained by [@rejeeshgr410](https://github.com/rejeeshgr410). Contributions are welcome through issues and pull requests.
