@@ -51,6 +51,10 @@ The app requests only the permissions needed by enabled features, including micr
 
 The project is under active development and field validation. Nearby discovery, secure pairing, reconnection, and voice delivery are being exercised across different Android devices with internet disabled. Range, latency, battery behavior, background survival, multi-peer behavior, and compatibility should be verified for the exact devices and Android versions you plan to use.
 
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
+
 ## Contributing
 
 Please open an issue with reproducible device, Android-version, and connection-state details before proposing a fix. Do not include APK signing keys, passwords, device identifiers, or private logs in issues or pull requests.
