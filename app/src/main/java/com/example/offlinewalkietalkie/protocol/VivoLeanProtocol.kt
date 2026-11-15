@@ -6,7 +6,8 @@ import java.nio.ByteOrder
 /**
  * High-Efficiency Packed Wire Protocol.
  *
- * Reverse-engineered directly from Vivo Walkie-Talkie v1.2.0 (pj.e.h & pj.w.i):
+ * TalkLoop's compact BLE control envelope, informed by static research of a
+ * Vivo system app. It is application-owned and is not Vivo interoperable.
  * - Ultra-lean 4-byte packed header:
  *   - Bits 0..7: Packet Type (1..12)
  *   - Bits 8..10: Codec Mode Index (0..7)
@@ -17,7 +18,8 @@ import java.nio.ByteOrder
  */
 object VivoLeanProtocol {
 
-    // Packet Types (from pj.w.i)
+    // TalkLoop packet types. Numeric values are app-owned and intentionally do
+    // not claim interoperability with a third-party or OEM application.
     const val TYPE_AUDIO_FRAME = 0x01
     const val TYPE_SOS_EMERGENCY = 0x02
     const val TYPE_CONNECT_REQ = 0x03
@@ -37,15 +39,8 @@ object VivoLeanProtocol {
     const val SHIFT_CODEC_MODE = 8
     const val FLAG_NO_TIMESTAMP = 0x4000 // Bit 14 (16384)
 
-    // Codec Modes (Matching Vivo nj.a and Codec2 / AMR-NB bitrates)
-    // 0: Codec2 1600 bps / AMR-NB 4.75 kbps
-    // 1: Codec2 3200 bps / AMR-NB 5.15 kbps
-    // 2: Codec2 2400 bps (Default) / AMR-NB 5.90 kbps
-    // 3: Codec2 1400 bps / AMR-NB 6.70 kbps
-    // 4: Codec2 1300 bps / AMR-NB 7.40 kbps
-    // 5: Codec2 1200 bps / AMR-NB 7.95 kbps
-    // 6: Codec2 700 bps (700C) / AMR-NB 10.20 kbps
-    // 7: Codec2 450 bps / AMR-NB 12.20 kbps
+    // TalkLoop codec mode identifiers. They map to native Codec2 modes through
+    // CodecModeMapper; they are not wire-compatible with another app.
     const val CODEC_MODE_1600 = 0
     const val CODEC_MODE_3200 = 1
     const val CODEC_MODE_2400 = 2
@@ -167,6 +162,8 @@ object VivoLeanProtocol {
             ((data[2].toInt() and 0xFF) shl 8) or
             (data[3].toInt() and 0xFF)
         val type = firstInt and MASK_TYPE
-        return type in TYPE_AUDIO_FRAME..TYPE_CODEC_NACK
+        val allowedHeaderBits = MASK_TYPE or (MASK_CODEC_MODE shl SHIFT_CODEC_MODE) or FLAG_NO_TIMESTAMP
+        val hasReservedBits = (firstInt and allowedHeaderBits.inv()) != 0
+        return !hasReservedBits && type in TYPE_AUDIO_FRAME..TYPE_CODEC_NACK
     }
 }

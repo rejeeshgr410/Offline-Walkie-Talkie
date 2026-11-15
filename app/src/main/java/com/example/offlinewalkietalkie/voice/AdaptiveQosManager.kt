@@ -9,12 +9,13 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Real-Time Adaptive Bitrate QoS State Machine.
  *
- * Reverse-engineered directly from Vivo's OriginOS walkie-talkie engine (nj.b.e & nj.e):
+ * A TalkLoop policy informed by static research of Vivo's QoS structure:
  * - Evaluates real-time peer signal strength (RSSI in dBm).
  * - Level 2 (GoodQoSState): RSSI >= -80 dBm -> High-fidelity mode (AMR-NB or Codec2 3200/2400).
  * - Level 1 (ModerateQoSState): -80 dBm > RSSI > -95 dBm -> Standard robust mode (Codec2 1600 / AMR-NB 5.9k).
  * - Level 0 (BadQoSState): RSSI <= -95 dBm -> Extreme-range survival mode (Codec2 1400 / 1200 / 700).
- * - Dynamic codec negotiation via TYPE_CODEC_REQ (0x0A) and TYPE_CODEC_ACK (0x0B).
+ * - A caller must supply real link metrics and perform authenticated negotiation;
+ *   this class cannot prove a remote peer switched codecs.
  */
 class AdaptiveQosManager(
     initialCodecMode: Int = VivoLeanProtocol.CODEC_MODE_2400

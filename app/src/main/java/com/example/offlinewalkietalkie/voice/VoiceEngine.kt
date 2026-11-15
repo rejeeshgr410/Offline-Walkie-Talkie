@@ -37,19 +37,12 @@ class VoiceEngine(
     private fun handleAdaptiveCodecChange(targetMode: Int) {
         Log.i(TAG, "Adaptive QoS reconfiguring audio codec for mode $targetMode")
         if (codec is Codec2AudioCodec) {
-            codec = Codec2AudioCodec(mode = targetMode)
+            codec = Codec2AudioCodec(mode = CodecModeMapper.codec2NativeModeForWireMode(targetMode))
         } else if (codec is AmrNbCodec) {
-            val targetBitrate = when (targetMode) {
-                0 -> 4750
-                1 -> 5150
-                2 -> 5900
-                3 -> 6700
-                4 -> 7400
-                5 -> 7950
-                6 -> 10200
-                else -> 12200
-            }
-            codec = AmrNbCodec(sampleRate = 8000, bitrate = targetBitrate)
+            codec = AmrNbCodec(
+                sampleRate = 8000,
+                bitrate = CodecModeMapper.amrNbBitrateForWireMode(targetMode)
+            )
         }
     }
     

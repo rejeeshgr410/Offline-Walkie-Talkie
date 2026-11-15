@@ -20,9 +20,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.offlinewalkietalkie.R
 import com.example.offlinewalkietalkie.protocol.SosBeacon
 import com.example.offlinewalkietalkie.theme.*
 
@@ -82,7 +84,7 @@ fun SosAlertBanner(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Warning,
-                            contentDescription = "Distress Alert",
+                            contentDescription = stringResource(R.string.distress_alert),
                             tint = AppleSystemRed,
                             modifier = Modifier.size(22.dp)
                         )
@@ -90,7 +92,7 @@ fun SosAlertBanner(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "DISTRESS: ${topAlert.senderName.uppercase()}",
+                            text = stringResource(R.string.distress_sender, topAlert.senderName.uppercase()),
                             color = Color.White,
                             style = AppleHeadline,
                             fontSize = 14.sp
@@ -112,14 +114,18 @@ fun SosAlertBanner(
 
                 Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                     Text(
-                        text = if (isGpsValid) "GPS: ${"%.4f".format(topAlert.latitude)}, ${"%.4f".format(topAlert.longitude)} • Alt: ${topAlert.altitude.toInt()}m"
-                               else "⚠️ No GPS coordinates attached (approximate location unknown)",
+                        text = if (isGpsValid) stringResource(
+                            R.string.gps_coordinates,
+                            "%.4f".format(topAlert.latitude),
+                            "%.4f".format(topAlert.longitude),
+                            topAlert.altitude.toInt()
+                        ) else stringResource(R.string.gps_missing),
                         color = if (isGpsValid) Color.White.copy(alpha = 0.9f) else AppleSystemYellow,
                         style = AppleCaption1,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = if (ageSec > 300) "⚠️ Transmitted ${ageSec / 60}m ago (Stale)" else "Live fix • ${ageSec}s ago • Hop TTL: ${topAlert.ttl}",
+                        text = if (ageSec > 300) stringResource(R.string.sos_stale, ageSec / 60) else stringResource(R.string.sos_live_fix, ageSec, topAlert.ttl),
                         color = Color.White.copy(alpha = 0.75f),
                         style = AppleCaption2
                     )
@@ -132,7 +138,7 @@ fun SosAlertBanner(
                 ) {
                     if (topAlert.batteryPercent in 0..100) {
                         Text(
-                            text = "Battery: ${topAlert.batteryPercent}%",
+                            text = stringResource(R.string.battery_percent, topAlert.batteryPercent),
                             color = Color.White.copy(alpha = 0.8f),
                             style = AppleMonospacedDigits,
                             fontSize = 12.sp
@@ -155,7 +161,7 @@ fun SosAlertBanner(
                             ) {
                                 Icon(Icons.Default.NotificationsOff, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Silence", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(stringResource(R.string.silence), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             }
                         }
 
@@ -171,7 +177,7 @@ fun SosAlertBanner(
                         ) {
                             Icon(Icons.Default.Radar, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Track on Radar", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text(stringResource(R.string.track_on_radar), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
                     }
                 }
@@ -217,7 +223,7 @@ fun SosBroadcastingStatusBanner(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Warning,
-                        contentDescription = "Broadcasting Distress",
+                        contentDescription = stringResource(R.string.broadcasting_distress),
                         tint = AppleSystemRed,
                         modifier = Modifier.size(22.dp)
                     )
@@ -225,13 +231,13 @@ fun SosBroadcastingStatusBanner(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "EMERGENCY SOS ACTIVE",
+                        text = stringResource(R.string.emergency_sos_active),
                         color = Color.White,
                         style = AppleHeadline,
                         fontSize = 14.sp
                     )
                     Text(
-                        text = beacon?.distressMessage ?: "Distress Beacon Broadcasting",
+                        text = beacon?.distressMessage ?: stringResource(R.string.distress_broadcasting),
                         color = Color.White.copy(alpha = 0.9f),
                         style = AppleBody,
                         fontSize = 13.sp
@@ -261,9 +267,9 @@ fun SosBroadcastingStatusBanner(
                     Column {
                         Text(
                             text = if (responders.isNotEmpty()) {
-                                "Delivered to ${responders.size} responder(s):"
+                                stringResource(R.string.delivered_responders, responders.size)
                             } else {
-                                "Broadcasting on all offline mesh hops…"
+                                stringResource(R.string.broadcasting_mesh_hops)
                             },
                             color = Color.White,
                             style = AppleCaption1,
@@ -273,7 +279,7 @@ fun SosBroadcastingStatusBanner(
                             text = if (responders.isNotEmpty()) {
                                 responders.joinToString(", ") { it.responderName }
                             } else {
-                                "Waiting for mesh peer acknowledgments"
+                                stringResource(R.string.waiting_mesh_ack)
                             },
                             color = Color.White.copy(alpha = 0.85f),
                             style = AppleCaption2
@@ -291,7 +297,7 @@ fun SosBroadcastingStatusBanner(
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth().height(38.dp)
             ) {
-                Text("Stop SOS Broadcast", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(stringResource(R.string.stop_sos), fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
         }
     }
@@ -306,10 +312,10 @@ fun SosBroadcastModal(
     onStartSos: (String) -> Unit
 ) {
     val presets = listOf(
-        "Medical Emergency • Need Immediate Aid",
-        "Injured / Fall • Cannot Walk",
-        "Lost on Trail • Need Direction",
-        "Vehicle Breakdown • Stranded"
+        stringResource(R.string.sos_medical),
+        stringResource(R.string.sos_injured),
+        stringResource(R.string.sos_lost),
+        stringResource(R.string.sos_vehicle)
     )
     var selectedPreset by remember { mutableStateOf(presets.first()) }
     var customText by remember { mutableStateOf("") }
@@ -330,19 +336,19 @@ fun SosBroadcastModal(
                     Icon(Icons.Default.Warning, contentDescription = null, tint = AppleSystemRed, modifier = Modifier.size(22.dp))
                 }
                 Spacer(modifier = Modifier.width(10.dp))
-                Text("Emergency SOS", style = AppleTitle3)
+                Text(stringResource(R.string.emergency_sos), style = AppleTitle3)
             }
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Distress beacons broadcast at high priority across all offline mesh channels, sounding alarms on nearby devices.",
+                    text = stringResource(R.string.sos_explanation),
                     style = AppleFootnote,
                     color = AppleTextSecondary
                 )
 
                 Text(
-                    text = "SELECT DISTRESS NATURE",
+                    text = stringResource(R.string.select_distress_nature),
                     style = AppleCaption2,
                     modifier = Modifier.padding(top = 8.dp)
                 )
@@ -382,7 +388,7 @@ fun SosBroadcastModal(
                 OutlinedTextField(
                     value = customText,
                     onValueChange = { customText = it },
-                    placeholder = { Text("Or enter custom location notes…", style = AppleFootnote) },
+                    placeholder = { Text(stringResource(R.string.sos_custom_notes), style = AppleFootnote) },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -412,7 +418,7 @@ fun SosBroadcastModal(
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.height(44.dp)
             ) {
-                Text("Broadcast SOS Beacon", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(stringResource(R.string.broadcast_sos), fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
         },
         dismissButton = {
@@ -420,7 +426,7 @@ fun SosBroadcastModal(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text("Cancel", color = AppleTextSecondary, fontWeight = FontWeight.Medium)
+                Text(stringResource(R.string.cancel), color = AppleTextSecondary, fontWeight = FontWeight.Medium)
             }
         }
     )

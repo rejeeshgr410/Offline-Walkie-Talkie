@@ -23,7 +23,19 @@ import java.nio.ByteBuffer
 import java.util.UUID
 
 @SuppressLint("MissingPermission")
-class BluetoothClassicTransport(private val context: Context) : Transport {
+class BluetoothClassicTransport(private val context: Context, private val identityKeyHex: String = "") : Transport {
+    private val _error = MutableStateFlow<String?>(null)
+    override val lastError = _error.asStateFlow()
+    private val _advertising = MutableStateFlow(false)
+    override val isAdvertising = _advertising.asStateFlow()
+    private val _discovering = MutableStateFlow(false)
+    override val isDiscovering = _discovering.asStateFlow()
+    private val _pending = MutableStateFlow<ConnectionRequest?>(null)
+    override val pendingConnectionRequest = _pending.asStateFlow()
+    private val confirmations = MutableSharedFlow<PairingConfirmation>(extraBufferCapacity = 16)
+    override val pairingConfirmations = confirmations.asSharedFlow()
+    private var localName = "TalkLoop"
+    private var receiverRegistered = false
 
     companion object {
         private const val TAG = "TL/BtClassic"
@@ -54,7 +66,8 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     private var serverSocket: BluetoothServerSocket? = null
-    private var activeConnections = mutableMapOf<String, ConnectedThread>()
+    private val activeConnections = java.util.concurrent.ConcurrentHashMap<String, ConnectedThread>()
+    private val pendingSockets = java.util.concurrent.ConcurrentHashMap<String, BluetoothSocket>()
 
     private val discoveryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -79,6 +92,8 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
     override suspend fun startAdvertising(identity: LocalIdentity) {
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return
         
+        localName = identity.endpointName
+        if (serverSocket != null) return
         _state.value = TransportState.ACTIVE
         startAcceptThread()
     }
@@ -87,17 +102,21 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return
         
         _state.value = TransportState.ACTIVE
+        localName = identity.endpointName
+        bluetoothAdapter.bondedDevices.forEach { addOrUpdatePeer(it.address, it.name ?: "Bluetooth phone", activeConnections.containsKey(it.address)) }
+        if (receiverRegistered) return
         val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(discoveryReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                context.registerReceiver(discoveryReceiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 context.registerReceiver(discoveryReceiver, filter)
             }
+            receiverRegistered = true
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to register discoveryReceiver", e)
         }
-        bluetoothAdapter.startDiscovery()
+        _discovering.value = bluetoothAdapter.startDiscovery()
     }
 
     override suspend fun connect(peerId: String) {
@@ -107,10 +126,14 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
         coroutineScope.launch {
             try {
                 val socket = device.createRfcommSocketToServiceRecord(APP_UUID)
+                pendingSockets[peerId] = socket
                 socket.connect()
                 manageConnectedSocket(socket, device)
             } catch (e: IOException) {
-                // Connection failed
+                _error.value = "Bluetooth connection failed: ${e.message}"
+                pendingSockets[peerId]?.close()
+            } finally {
+                pendingSockets.remove(peerId)
             }
         }
     }
@@ -120,17 +143,23 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
     }
 
     override suspend fun rejectConnection(peerId: String) {
-        // Not used in standard BT MVP
+        disconnect(peerId)
+    }
+
+    override suspend fun confirmPairing(peerId: String, authCode: String) {
+        val request = activeConnections[peerId]?.request ?: return
+        if (request.authCode == authCode) activeConnections[peerId]?.writeControl("confirm", authCode)
     }
 
     override suspend fun disconnect(peerId: String) {
         activeConnections[peerId]?.cancel()
         activeConnections.remove(peerId)
+        if (_pending.value?.peerId == peerId) _pending.value = null
         removePeer(peerId)
     }
 
     override suspend fun send(peerId: String, bytes: ByteArray) {
-        activeConnections[peerId]?.write(bytes)
+        withContext(Dispatchers.IO) { activeConnections[peerId]?.write(bytes) }
     }
 
     override fun incomingFrames(): Flow<IncomingFrame> = _incomingFrames.asSharedFlow()
@@ -144,8 +173,14 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
         }
         serverSocket?.close()
         serverSocket = null
+        receiverRegistered = false
+        _advertising.value = false
+        _discovering.value = false
+        _pending.value = null
         activeConnections.values.forEach { it.cancel() }
         activeConnections.clear()
+        pendingSockets.values.forEach { runCatching { it.close() } }
+        pendingSockets.clear()
         _peers.value = emptyMap()
         _state.value = TransportState.IDLE
         coroutineScope.coroutineContext.cancelChildren()
@@ -155,6 +190,7 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
         coroutineScope.launch {
             try {
                 serverSocket = bluetoothAdapter?.listenUsingRfcommWithServiceRecord(APP_NAME, APP_UUID)
+                _advertising.value = serverSocket != null
                 var shouldLoop = true
                 while (shouldLoop) {
                     val socket: BluetoothSocket? = try {
@@ -168,7 +204,8 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
                     }
                 }
             } catch (e: Exception) {
-                // Handle error
+                _error.value = "Bluetooth listener failed: ${e.message}"
+                _advertising.value = false
             }
         }
     }
@@ -178,51 +215,65 @@ class BluetoothClassicTransport(private val context: Context) : Transport {
         val name = device.name ?: "Unknown"
         addOrUpdatePeer(address, name, true)
         val thread = ConnectedThread(socket, address)
-        activeConnections[address] = thread
+        activeConnections.put(address, thread)?.cancel()
         thread.start()
+        thread.writeControl("hello", java.util.UUID.randomUUID().toString())
     }
 
     private inner class ConnectedThread(private val socket: BluetoothSocket, private val peerId: String) : Thread() {
         private val inStream: InputStream = socket.inputStream
         private val outStream: OutputStream = socket.outputStream
+        private val nonce = java.util.UUID.randomUUID().toString()
+        var request: ConnectionRequest? = null
+
+        fun writeControl(kind: String, value: String) {
+            val json = org.json.JSONObject().put("kind", kind).put("value", if (kind == "hello") nonce else value)
+                .put("identity", identityKeyHex).put("name", localName)
+            write(byteArrayOf(0x54, 0x43) + json.toString().toByteArray(Charsets.UTF_8))
+        }
+
+        private fun consumeControl(payload: ByteArray): Boolean {
+            if (payload.size < 2 || payload[0] != 0x54.toByte() || payload[1] != 0x43.toByte()) return false
+            val json = org.json.JSONObject(String(payload, 2, payload.size - 2, Charsets.UTF_8))
+            when (json.getString("kind")) {
+                "hello" -> {
+                    if (request != null) return true
+                    val transcript = listOf("$nonce:$identityKeyHex", "${json.getString("value")}:${json.getString("identity")}").sorted().joinToString("|")
+                    val hash = java.security.MessageDigest.getInstance("SHA-256").digest(transcript.toByteArray())
+                    val code = ((java.nio.ByteBuffer.wrap(hash).int.toLong() and 0xffffffffL) % 1000000)
+                    val req = ConnectionRequest(peerId, json.getString("name"), "%06d".format(java.util.Locale.US, code), json.optString("identity").takeIf { it.isNotBlank() })
+                    request = req
+                    _pending.value = req
+                    _connectionRequests.tryEmit(req)
+                }
+                "confirm" -> request?.takeIf { it.authCode == json.getString("value") }?.let {
+                    confirmations.tryEmit(PairingConfirmation(peerId, it.authCode))
+                    if (_pending.value?.peerId == peerId) _pending.value = null
+                }
+            }
+            return true
+        }
 
         override fun run() {
             while (true) {
                 try {
-                    val lengthBytes = ByteArray(4)
-                    var readLength = inStream.read(lengthBytes)
-                    if (readLength == -1) break
-                    
-                    val length = ByteBuffer.wrap(lengthBytes).int
-                    if (length > 0) {
-                        val payload = ByteArray(length)
-                        var totalRead = 0
-                        while (totalRead < length) {
-                            val r = inStream.read(payload, totalRead, length - totalRead)
-                            if (r == -1) break
-                            totalRead += r
-                        }
-                        if (totalRead == length) {
-                            _incomingFrames.tryEmit(IncomingFrame(peerId, payload))
-                        }
-                    }
-                } catch (e: IOException) {
+                    val payload = RfcommFraming.read(inStream)
+                    if (!consumeControl(payload)) _incomingFrames.tryEmit(IncomingFrame(peerId, payload))
+                } catch (e: Exception) {
                     break
                 }
             }
             // Disconnected
-            activeConnections.remove(peerId)
-            removePeer(peerId)
+            cancel()
+            if (activeConnections.remove(peerId, this)) removePeer(peerId)
         }
 
-        fun write(bytes: ByteArray) {
+        @Synchronized fun write(bytes: ByteArray) {
             try {
-                val lengthBytes = ByteBuffer.allocate(4).putInt(bytes.size).array()
-                outStream.write(lengthBytes)
-                outStream.write(bytes)
-                outStream.flush()
+                RfcommFraming.write(outStream, bytes)
             } catch (e: IOException) {
-                // Send failed
+                _error.value = "Bluetooth write failed: ${e.message}"
+                cancel()
             }
         }
 

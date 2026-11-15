@@ -127,7 +127,7 @@ class AudioRouteManager(private val context: Context) {
 
     fun refreshAvailableRoutes() {
         val routes = mutableListOf(AudioRoute.SPEAKER, AudioRoute.EARPIECE)
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_ALL)
+        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
 
         val hasBt = devices.any {
             it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||

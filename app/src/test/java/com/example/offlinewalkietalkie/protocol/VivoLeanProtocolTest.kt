@@ -89,4 +89,11 @@ class VivoLeanProtocolTest {
             assertEquals(mode, packet!!.codecMode)
         }
     }
+
+    @Test
+    fun singlePacketEnvelopeAroundWtFrameIsNotLeanControl() {
+        val framed = Frame(type = FrameType.AUTH, payload = ByteArray(32)).toBytes()
+        val envelope = byteArrayOf(0) + framed
+        assertFalse(VivoLeanProtocol.isLeanPacket(envelope))
+    }
 }

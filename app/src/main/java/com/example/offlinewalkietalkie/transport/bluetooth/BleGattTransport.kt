@@ -14,6 +14,7 @@ import com.example.offlinewalkietalkie.protocol.VivoLeanProtocol
 import com.example.offlinewalkietalkie.transport.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
@@ -22,21 +23,25 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Long-Range Direct BLE GATT Transport Engine (Vivo-style OEM Architecture).
+ * Direct BLE GATT transport for TalkLoop's application-owned protocol.
  *
  * Implements Vivo's production walkie-talkie architecture:
  * - Pure Direct BLE: Simultaneous BluetoothGattServer (peripheral) and BluetoothGatt (central).
- * - Bluetooth 5.0 LE Coded PHY (S=8) with 1M fallback for up to ~1 km direct outdoor range.
+ * - Requests LE Coded PHY (S=8) where hardware exposes it, with normal PHY fallback.
  * - Single-packet & chunked voice delivery via WRITE_TYPE_NO_RESPONSE for sub-millisecond audio.
- * - Full compatibility with Android 10 (API 29) through Android 17 (API 36+).
+ * - Targets Android 10+; radio behavior remains device and firmware dependent.
  * - Automatic background peer discovery and connection (zero manual pairing friction).
  * - 100% Offline: zero dependency on Wi-Fi, Hotspot, cellular data, or Google Play Services.
  */
 @SuppressLint("MissingPermission")
-class BleGattTransport(private val context: Context) : Transport {
+class BleGattTransport(
+    private val context: Context,
+    private val localIdentityKeyHex: String = ""
+) : Transport {
 
     companion object {
         private const val TAG = "TL/BleGattTransport"
+        private const val PAIRING_TIMEOUT_MS = 120_000L
 
         // TalkLoop Dedicated Application Service & Characteristic UUIDs (Application-Owned Protocol)
         val SERVICE_UUID: UUID = UUID.fromString("1A800001-B4B5-4C3D-8F9E-7A6B5C4D3E2F")
@@ -56,14 +61,29 @@ class BleGattTransport(private val context: Context) : Transport {
     private val _state = MutableStateFlow(TransportState.IDLE)
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
+    private val _lastError = MutableStateFlow<String?>(null)
+    override val lastError: StateFlow<String?> = _lastError.asStateFlow()
+
     private val _peers = MutableStateFlow<Map<String, Peer>>(emptyMap())
     override val peers: Flow<List<Peer>> = _peers.map { it.values.toList() }
 
     private val _connectionRequests = MutableSharedFlow<ConnectionRequest>(
+        // Service discovery may complete before the ViewModel's coroutine has
+        // started collecting.  Retain the current pairing request so neither
+        // side silently loses its verification screen on a fast BLE link.
+        replay = 1,
         extraBufferCapacity = 10,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     override val connectionRequests: Flow<ConnectionRequest> = _connectionRequests.asSharedFlow()
+    private val _pendingConnectionRequest = MutableStateFlow<ConnectionRequest?>(null)
+    override val pendingConnectionRequest: StateFlow<ConnectionRequest?> = _pendingConnectionRequest.asStateFlow()
+
+    private val _pairingConfirmations = MutableSharedFlow<PairingConfirmation>(
+        extraBufferCapacity = 10,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    override val pairingConfirmations: Flow<PairingConfirmation> = _pairingConfirmations.asSharedFlow()
 
     private val _incomingFrames = MutableSharedFlow<IncomingFrame>(
         extraBufferCapacity = 512,
@@ -78,6 +98,9 @@ class BleGattTransport(private val context: Context) : Transport {
     override val isDiscovering: StateFlow<Boolean> = _isDiscovering.asStateFlow()
 
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private data class ServerNotification(val peerId: String, val bytes: ByteArray)
+    private val serverNotificationQueue = Channel<ServerNotification>(Channel.UNLIMITED)
+    @Volatile private var pendingNotificationResult: CompletableDeferred<Int>? = null
 
     // Active client GATT connections: peerAddress -> BluetoothGatt
     private val clientGatts = ConcurrentHashMap<String, BluetoothGatt>()
@@ -96,8 +119,13 @@ class BleGattTransport(private val context: Context) : Transport {
 
     // Reconnection tracking for exponential backoff (Phase B)
     private val reconnectJobs = ConcurrentHashMap<String, Job>()
+    private val pairingDeadlineJobs = ConcurrentHashMap<String, Job>()
     private val reconnectAttempts = ConcurrentHashMap<String, Int>()
     private val intentionallyDisconnectedPeers = ConcurrentHashMap.newKeySet<String>()
+    private val ignoredRotatedScanAddresses = ConcurrentHashMap.newKeySet<String>()
+    private val locallyConfirmedPairings = ConcurrentHashMap.newKeySet<String>()
+    private val remotelyConfirmedPairings = ConcurrentHashMap.newKeySet<String>()
+    private val verifiedPairingAddresses = ConcurrentHashMap.newKeySet<String>()
 
     // Outgoing packet sequence counter
     private val outgoingPacketSeq = AtomicInteger(1)
@@ -136,6 +164,7 @@ class BleGattTransport(private val context: Context) : Transport {
                     }
                 } else if (state == BluetoothAdapter.STATE_OFF || state == BluetoothAdapter.STATE_TURNING_OFF) {
                     Log.i(TAG, "Bluetooth turned OFF -> pausing transport")
+                    reportError("Bluetooth was turned off")
                     _state.value = TransportState.IDLE
                     cancelAllReconnects()
                 }
@@ -144,6 +173,36 @@ class BleGattTransport(private val context: Context) : Transport {
     }
 
     init {
+        coroutineScope.launch {
+            for (notification in serverNotificationQueue) {
+                val server = gattServer ?: continue
+                val device = serverConnectedDevices[notification.peerId] ?: continue
+                val characteristic = serverCharacteristic ?: continue
+                val completion = CompletableDeferred<Int>()
+                pendingNotificationResult = completion
+                val started = try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        server.notifyCharacteristicChanged(device, characteristic, false, notification.bytes) ==
+                            BluetoothStatusCodes.SUCCESS
+                    } else {
+                        @Suppress("DEPRECATION")
+                        characteristic.value = notification.bytes
+                        @Suppress("DEPRECATION")
+                        server.notifyCharacteristicChanged(device, characteristic, false)
+                    }
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Server notification failed to start", e)
+                    false
+                }
+                if (started) {
+                    val status = withTimeoutOrNull(1_500) { completion.await() }
+                    if (status != BluetoothGatt.GATT_SUCCESS) {
+                        Log.w(TAG, "Server notification completion status=$status peer=${notification.peerId}")
+                    }
+                }
+                if (pendingNotificationResult === completion) pendingNotificationResult = null
+            }
+        }
         try {
             val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -158,31 +217,38 @@ class BleGattTransport(private val context: Context) : Transport {
 
     // GATT Server Callback (Peripheral Role)
     private val gattServerCallback = object : BluetoothGattServerCallback() {
+        override fun onNotificationSent(device: BluetoothDevice?, status: Int) {
+            pendingNotificationResult?.complete(status)
+        }
         override fun onConnectionStateChange(device: BluetoothDevice?, status: Int, newState: Int) {
             val address = device?.address ?: return
             val name = device.name?.takeIf { it.isNotBlank() } ?: _peers.value[address]?.name ?: "Peer ${address.takeLast(5)}"
             Log.i(TAG, "GattServer connectionStateChange: $address -> newState=$newState (status=$status)")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 cancelReconnect(address)
+                replaceRotatedConnections(address, name)
                 serverConnectedDevices[address] = device
                 addOrUpdatePeer(address, name, isConnected = true)
 
-                // Symmetrical Connection: Connect client back if we haven't already
-                if (!clientGatts.containsKey(address) && !connectingAddresses.contains(address)) {
-                    connectingAddresses.add(address)
-                    coroutineScope.launch {
-                        delay(250)
-                        connect(address)
-                        delay(3000)
-                        connectingAddresses.remove(address)
-                    }
-                }
+                // The scanner elects one deterministic GATT client.  Never
+                // connect back from the server callback: doing so races the
+                // original link and is the primary source of duplicate peers
+                // and failed code verification on real Android devices.
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    reportError("BLE link to $name ended (GATT status $status)")
+                }
                 serverConnectedDevices.remove(address)
                 val isClientConnected = clientGatts.containsKey(address)
+                if (!isClientConnected) clearPairingState(address)
                 addOrUpdatePeer(address, name, isConnected = isClientConnected)
                 if (!isClientConnected && !intentionallyDisconnectedPeers.contains(address) && _state.value == TransportState.ACTIVE) {
-                    scheduleExponentialReconnect(address)
+                    // Android BLE privacy addresses rotate.  Reconnecting to
+                    // this cached address causes repeated GATT 133 failures;
+                    // the already-running scanner will find the peer's fresh
+                    // address and run the deterministic election again.
+                    removePeerIfDisconnected(address)
+                    Log.i(TAG, "Server link ended for $address; waiting for fresh scan result")
                 }
             }
         }
@@ -199,6 +265,27 @@ class BleGattTransport(private val context: Context) : Transport {
             val address = device?.address ?: return
             if (value != null && value.isNotEmpty()) {
                 handleIncomingBytes(address, value)
+                // The initiating client writes CONNECT_REQ before its CCCD
+                // subscription is guaranteed complete. Echo its code back as
+                // an explicit pairing receipt after a short delay so it also
+                // gets a durable local pairing event over notifications.
+                val packet = VivoLeanProtocol.decode(value)
+                if (packet?.type == VivoLeanProtocol.TYPE_CONNECT_REQ) {
+                    val parts = String(packet.payload, Charsets.UTF_8).split("|", limit = 3)
+                    val code = parts.firstOrNull().orEmpty()
+                    if (code.length == 6 && code.all { it.isDigit() }) {
+                        coroutineScope.launch {
+                            delay(700)
+                            writeRawPacket(
+                                address,
+                                VivoLeanProtocol.encode(
+                                    type = VivoLeanProtocol.TYPE_AUTO_CONNECT,
+                                    payload = "PAIR|$code|$localDisplayName|$localIdentityKeyHex".toByteArray(Charsets.UTF_8)
+                                )
+                            )
+                        }
+                    }
+                }
             }
             if (responseNeeded) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
@@ -240,7 +327,9 @@ class BleGattTransport(private val context: Context) : Transport {
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 cancelReconnect(address)
+                replaceRotatedConnections(address, name)
                 clientGatts[address] = gatt
+                clearError()
                 addOrUpdatePeer(address, name, isConnected = true)
 
                 // Request high MTU for high-throughput voice transmission
@@ -265,9 +354,11 @@ class BleGattTransport(private val context: Context) : Transport {
                 peerMtus.remove(address)
                 try { gatt.close() } catch (e: Throwable) {}
                 val isServerConnected = serverConnectedDevices.containsKey(address)
+                if (!isServerConnected) clearPairingState(address)
                 addOrUpdatePeer(address, name, isConnected = isServerConnected)
 
                 if (status != BluetoothGatt.GATT_SUCCESS) {
+                    reportError("BLE connection to $name failed (GATT status $status)")
                     val failures = reconnectAttempts.getOrDefault(address, 0)
                     if (failures >= 3) {
                         Log.w(TAG, "Persistent GATT error $status on $address; pruning stale peer to allow fresh scan")
@@ -280,14 +371,15 @@ class BleGattTransport(private val context: Context) : Transport {
                 }
 
                 if (!isServerConnected && !intentionallyDisconnectedPeers.contains(address) && _state.value == TransportState.ACTIVE) {
-                    scheduleExponentialReconnect(address)
+                    removePeerIfDisconnected(address)
+                    Log.i(TAG, "Client link ended for $address; waiting for fresh scan result")
                 }
             }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
             val address = gatt?.device?.address ?: return
-            if (status == BluetoothGatt.GATT_SUCCESS && gatt != null) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
                 val service = gatt.getService(SERVICE_UUID)
                 val characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
                 if (characteristic != null) {
@@ -303,10 +395,10 @@ class BleGattTransport(private val context: Context) : Transport {
                     val code = existingCode ?: "%06d".format(
                         java.util.concurrent.ThreadLocalRandom.current().nextInt(100000, 999999)
                     )
-                    peerAuthCodes[address] = code
+                    registerPairingCode(address, code)
 
                     // Transmit Lean TYPE_CONNECT_REQ carrying this exact code and localDisplayName to the peer
-                    val payloadStr = "$code|$localDisplayName"
+                    val payloadStr = "$code|$localDisplayName|$localIdentityKeyHex"
                     val connectReqPacket = VivoLeanProtocol.encode(
                         type = VivoLeanProtocol.TYPE_CONNECT_REQ,
                         payload = payloadStr.toByteArray(Charsets.UTF_8)
@@ -316,13 +408,27 @@ class BleGattTransport(private val context: Context) : Transport {
                         writeRawPacket(address, connectReqPacket)
                     }
 
-                    _connectionRequests.tryEmit(
-                        ConnectionRequest(
-                            peerId = address,
-                            peerName = peerName,
-                            authCode = code
-                        )
-                    )
+                    // Wait for the server's PAIR receipt, which carries its
+                    // stable identity fingerprint. Publishing an identity-less
+                    // request immediately caused a trusted reconnect to flash
+                    // the verification screen and left it stranded when the
+                    // server then rejected a changed identity. Keep a delayed
+                    // fallback for older peers that do not send the receipt.
+                    coroutineScope.launch {
+                        delay(1_500)
+                        if (peerAuthCodes[address] == code &&
+                            _pendingConnectionRequest.value?.peerId != address
+                        ) {
+                            publishConnectionRequest(
+                                ConnectionRequest(
+                                    peerId = address,
+                                    peerName = peerName,
+                                    authCode = code
+                                )
+                            )
+                        }
+                    }
+                    startPairingDeadline(address, peerName)
 
                     // Enable notifications on this characteristic
                     gatt.setCharacteristicNotification(characteristic, true)
@@ -350,8 +456,10 @@ class BleGattTransport(private val context: Context) : Transport {
                         }
                     }
                 } else {
-                    Log.w(TAG, "Walkie-Talkie service/characteristic NOT found on $address")
+                    reportError("Peer $address did not expose the TalkLoop BLE service")
                 }
+            } else {
+                reportError("Service discovery failed for $address (GATT status $status)")
             }
         }
 
@@ -389,6 +497,8 @@ class BleGattTransport(private val context: Context) : Transport {
             Log.i(TAG, "GattClient MTU changed for $address: mtu=$mtu (status=$status)")
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 peerMtus[address] = mtu
+            } else {
+                reportError("MTU negotiation failed for $address (GATT status $status)")
             }
         }
     }
@@ -402,6 +512,7 @@ class BleGattTransport(private val context: Context) : Transport {
 
         override fun onStartFailure(errorCode: Int) {
             Log.w(TAG, "BLE GATT Advertising failed with code $errorCode")
+            reportError("BLE advertising failed (code $errorCode)")
             if (errorCode == AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE) {
                 Log.i(TAG, "Retrying advertising without scan response...")
                 val settings = AdvertiseSettings.Builder()
@@ -424,6 +535,7 @@ class BleGattTransport(private val context: Context) : Transport {
                         }
                         override fun onStartFailure(err: Int) {
                             Log.e(TAG, "BLE fallback advertising failed: $err")
+                            reportError("BLE advertising fallback failed (code $err)")
                             _isAdvertising.value = false
                         }
                     })
@@ -444,6 +556,14 @@ class BleGattTransport(private val context: Context) : Transport {
             val rawName = device.name?.takeIf { it.isNotBlank() } ?: recordName?.takeIf { it.isNotBlank() }
             val name = rawName ?: _peers.value[address]?.name ?: "TalkLoop ${address.takeLast(5)}"
 
+            // A client process can be killed while Android still reports its old
+            // GATT-server link as connected.  With BLE privacy enabled the relaunched
+            // phone is immediately seen under a new address, and the stale entry used
+            // to suppress the elected client forever.  Only evict an unauthenticated
+            // server-only entry with no active SAS exchange; authenticated links are
+            // intentionally retained across address rotation.
+            evictStaleUnauthenticatedServerLink(address, name)
+
             val isConn = clientGatts.containsKey(address) || serverConnectedDevices.containsKey(address)
             addOrUpdatePeer(address, name, isConnected = isConn)
 
@@ -453,8 +573,16 @@ class BleGattTransport(private val context: Context) : Transport {
                 it.name.equals(name, ignoreCase = true) && it.isConnected && it.id != address
             }
 
-            // Auto-connect to discovered TalkLoop device during active symmetric discovery
-            if (!isConn && !hasActiveConnected && !connectingAddresses.contains(address) && !intentionallyDisconnectedPeers.contains(address)) {
+            // Elect exactly one GATT client.  With two apps scanning and
+            // advertising at once, allowing both to connect creates duplicate
+            // physical links and incompatible pairing-code prompts.
+            val iAmInitiator = BleConnectionPolicy.shouldInitiateClient(
+                localAddress = localBluetoothAddress(),
+                remoteAddress = address,
+                localName = localDisplayName,
+                remoteName = name
+            )
+            if (!isConn && iAmInitiator && !hasActiveConnected && !connectingAddresses.contains(address) && !intentionallyDisconnectedPeers.contains(address)) {
                 connectingAddresses.add(address)
                 coroutineScope.launch {
                     Log.i(TAG, "Connecting GATT to discovered TalkLoop peer $name ($address)")
@@ -467,8 +595,83 @@ class BleGattTransport(private val context: Context) : Transport {
 
         override fun onScanFailed(errorCode: Int) {
             Log.w(TAG, "BLE Scan failed with code $errorCode")
+            reportError("BLE discovery failed (code $errorCode)")
             _isDiscovering.value = false
         }
+    }
+
+    private fun evictStaleUnauthenticatedServerLink(newAddress: String, name: String) {
+        val isGenericName = name.startsWith("TalkLoop") || name.startsWith("Walkie-Talkie") || name.startsWith("Peer ")
+        if (isGenericName) return
+
+        val stale = serverConnectedDevices.entries.firstOrNull { (oldAddress, _) ->
+            oldAddress != newAddress &&
+                _peers.value[oldAddress]?.name.equals(name, ignoreCase = true) &&
+                _peers.value[oldAddress]?.isAuthenticated != true &&
+                !peerAuthCodes.containsKey(oldAddress) &&
+                oldAddress !in locallyConfirmedPairings &&
+                oldAddress !in remotelyConfirmedPairings &&
+                oldAddress !in verifiedPairingAddresses &&
+                !clientGatts.containsKey(oldAddress)
+        } ?: return
+
+        Log.i(TAG, "Evicting stale unauthenticated server link ${stale.key} for rotated address $newAddress ($name)")
+        try {
+            gattServer?.cancelConnection(stale.value)
+        } catch (_: Throwable) {
+            // Removing local state still permits a fresh, deterministic connect.
+        }
+        serverConnectedDevices.remove(stale.key)
+        peerCharacteristics.remove(stale.key)
+        peerMtus.remove(stale.key)
+        clearPairingState(stale.key)
+        val current = _peers.value.toMutableMap()
+        current.remove(stale.key)
+        _peers.value = current
+    }
+
+    /**
+     * A killed/restarted phone can reconnect with a new BLE privacy address
+     * before Android reports the old ACL as disconnected. Once an actual new
+     * GATT connection (not merely a scan result) exists for the same named
+     * handset, retaining the old address makes the ViewModel canonicalize the
+     * stale session key and hides the new pairing/AUTH path. Retire every old
+     * bearer for that handset so the new address must establish a fresh ECDH
+     * session. Persistent trust still removes the second SAS prompt.
+     */
+    private fun replaceRotatedConnections(newAddress: String, name: String) {
+        val isGenericName = name.startsWith("TalkLoop") ||
+            name.startsWith("Walkie-Talkie") ||
+            name.startsWith("Peer ")
+        if (isGenericName) return
+
+        val staleAddresses = (clientGatts.keys + serverConnectedDevices.keys)
+            .filter { oldAddress ->
+                oldAddress != newAddress &&
+                    _peers.value[oldAddress]?.name.equals(name, ignoreCase = true)
+            }
+            .toSet()
+        if (staleAddresses.isEmpty()) return
+
+        val current = _peers.value.toMutableMap()
+        staleAddresses.forEach { oldAddress ->
+            Log.i(TAG, "Replacing rotated GATT link $oldAddress with $newAddress for '$name'")
+            intentionallyDisconnectedPeers.add(oldAddress)
+            cancelReconnect(oldAddress)
+            clientGatts.remove(oldAddress)?.let { staleGatt ->
+                try { staleGatt.disconnect() } catch (_: Throwable) { }
+                try { staleGatt.close() } catch (_: Throwable) { }
+            }
+            serverConnectedDevices.remove(oldAddress)?.let { staleDevice ->
+                try { gattServer?.cancelConnection(staleDevice) } catch (_: Throwable) { }
+            }
+            peerCharacteristics.remove(oldAddress)
+            peerMtus.remove(oldAddress)
+            connectingAddresses.remove(oldAddress)
+            clearPairingState(oldAddress)
+            current.remove(oldAddress)
+        }
+        _peers.value = current
     }
 
     private fun addOrUpdatePeer(address: String, name: String, isConnected: Boolean) {
@@ -481,17 +684,31 @@ class BleGattTransport(private val context: Context) : Transport {
             name
         }
 
-        // Deduplicate peers by device identity name:
-        // If a known non-generic name (e.g. "Pixel 6") already exists under a stale MAC address,
-        // prune the stale MAC address so each physical phone appears exactly once.
+        // Deduplicate only stale identities. Android BLE privacy uses rotating
+        // remote addresses, so a scan can report the same phone under a new
+        // address while a working GATT link still exists on the old one. Never
+        // close or replace that live link merely because its scan address moved.
         val isGeneric = cleanName.startsWith("TalkLoop") || cleanName.startsWith("Walkie-Talkie") || cleanName.startsWith("Peer ")
         if (!isGeneric) {
             val duplicateAddresses = current.filter { it.key != address && it.value.name.equals(cleanName, ignoreCase = true) }.keys
-            duplicateAddresses.forEach { dupAddr ->
+            val liveDuplicate = duplicateAddresses.firstOrNull { dupAddr ->
+                current[dupAddr]?.isConnected == true ||
+                    clientGatts.containsKey(dupAddr) ||
+                    serverConnectedDevices.containsKey(dupAddr)
+            }
+            if (liveDuplicate != null && !isConnected) {
+                if (ignoredRotatedScanAddresses.add(address)) {
+                    Log.d(TAG, "Ignoring rotated scan address $address for '$cleanName'; live link is $liveDuplicate")
+                }
+                return
+            }
+            duplicateAddresses.filter { dupAddr ->
+                current[dupAddr]?.isConnected != true &&
+                    !clientGatts.containsKey(dupAddr) &&
+                    !serverConnectedDevices.containsKey(dupAddr)
+            }.forEach { dupAddr ->
                 Log.i(TAG, "Pruning duplicate peer address $dupAddr for device '$cleanName' in favor of $address")
                 current.remove(dupAddr)
-                clientGatts.remove(dupAddr)?.let { try { it.close() } catch (_: Throwable) {} }
-                serverConnectedDevices.remove(dupAddr)
                 cancelReconnect(dupAddr)
             }
         }
@@ -500,6 +717,81 @@ class BleGattTransport(private val context: Context) : Transport {
         current[address] = Peer(id = address, name = cleanName, isConnected = isConnected, isAuthenticated = isAuth)
         _peers.value = current
     }
+
+    private fun localBluetoothAddress(): String? = try {
+        bluetoothAdapter?.address
+    } catch (_: SecurityException) {
+        null
+    }
+
+    private fun removePeerIfDisconnected(address: String) {
+        val current = _peers.value
+        if (current[address]?.isConnected != true &&
+            !clientGatts.containsKey(address) &&
+            !serverConnectedDevices.containsKey(address)
+        ) {
+            _peers.value = current - address
+        }
+    }
+
+    /** Pairing must not leave a phantom connected peer indefinitely. */
+    private fun startPairingDeadline(address: String, peerName: String) {
+        pairingDeadlineJobs.remove(address)?.cancel()
+        pairingDeadlineJobs[address] = coroutineScope.launch {
+            delay(PAIRING_TIMEOUT_MS)
+            if (peerAuthCodes.containsKey(address)) {
+                reportError("Pairing with $peerName timed out. Connect again and confirm the same code on both phones.")
+                disconnect(address)
+            }
+        }
+    }
+
+    private fun pairingCompleted(address: String) {
+        if (address !in locallyConfirmedPairings || address !in remotelyConfirmedPairings) return
+        verifiedPairingAddresses.add(address)
+        pairingDeadlineJobs.remove(address)?.cancel()
+        peerAuthCodes.remove(address)
+        clearError()
+        if (_pendingConnectionRequest.value?.peerId == address) _pendingConnectionRequest.value = null
+    }
+
+    private fun registerPairingCode(address: String, code: String) {
+        val previousCode = peerAuthCodes.put(address, code)
+        if (previousCode != code) {
+            locallyConfirmedPairings.remove(address)
+            remotelyConfirmedPairings.remove(address)
+            verifiedPairingAddresses.remove(address)
+        }
+    }
+
+    private fun clearPairingState(address: String) {
+        peerAuthCodes.remove(address)
+        locallyConfirmedPairings.remove(address)
+        remotelyConfirmedPairings.remove(address)
+        verifiedPairingAddresses.remove(address)
+        pairingDeadlineJobs.remove(address)?.cancel()
+        if (_pendingConnectionRequest.value?.peerId == address) {
+            _pendingConnectionRequest.value = null
+        }
+    }
+
+    private fun publishConnectionRequest(request: ConnectionRequest) {
+        Log.i(TAG, "Publishing pairing request for ${request.peerName} (${request.peerId}) code=${request.authCode}")
+        _pendingConnectionRequest.value = request
+        _connectionRequests.tryEmit(request)
+    }
+
+    private fun reportError(message: String) {
+        Log.w(TAG, message)
+        _lastError.value = message
+    }
+
+    private fun clearError() {
+        _lastError.value = null
+    }
+
+    private fun String.isValidIdentityHex(): Boolean =
+        length == 64 && all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
 
     private fun scheduleExponentialReconnect(address: String) {
         if (reconnectJobs.containsKey(address)) return
@@ -540,7 +832,17 @@ class BleGattTransport(private val context: Context) : Transport {
     private fun handleIncomingBytes(address: String, data: ByteArray) {
         if (data.isEmpty()) return
 
-        // 1. First priority: TalkLoop transport framing (single or chunked)
+        // 1. Lean control packets must be recognized before the BLE envelope.
+        // A Lean header is big-endian and the first byte for packet types 1-12
+        // is normally 0x00.  Checking PACKET_TYPE_SINGLE first therefore
+        // swallowed CONNECT_REQ as an app frame, leaving the peer with a
+        // transport link but no pairing-code handshake.
+        if (VivoLeanProtocol.isLeanPacket(data)) {
+            handleLeanControlPacket(address, data)
+            return
+        }
+
+        // 2. TalkLoop transport framing (single or chunked)
         if (data[0] == PACKET_TYPE_SINGLE) {
             val frameBytes = data.copyOfRange(1, data.size)
             _incomingFrames.tryEmit(IncomingFrame(address, frameBytes))
@@ -590,64 +892,6 @@ class BleGattTransport(private val context: Context) : Transport {
             return
         }
 
-        // 2. Second priority: Raw Vivo-style Lean Wire Protocol control packets (CONNECT_REQ, CODEC_REQ, etc.)
-        if (VivoLeanProtocol.isLeanPacket(data)) {
-            val packet = VivoLeanProtocol.decode(data)
-            if (packet != null) {
-                when (packet.type) {
-                    VivoLeanProtocol.TYPE_CONNECT_REQ -> {
-                        val rawPayload = if (packet.payload.isNotEmpty()) {
-                            String(packet.payload, Charsets.UTF_8).trim()
-                        } else ""
-                        val parts = rawPayload.split("|", limit = 2)
-                        val receivedCode = parts[0]
-                        val remotePeerName = if (parts.size > 1 && parts[1].isNotBlank()) parts[1] else null
-
-                        if (receivedCode.isNotBlank() && receivedCode.length == 6) {
-                            val currentCode = peerAuthCodes[address]
-                            val finalCode = if (currentCode != null && currentCode < receivedCode) {
-                                // Deterministic tie-breaker: tell peer to use our lower code
-                                val reply = VivoLeanProtocol.encode(
-                                    type = VivoLeanProtocol.TYPE_CONNECT_REQ,
-                                    payload = "$currentCode|$localDisplayName".toByteArray(Charsets.UTF_8)
-                                )
-                                coroutineScope.launch { writeRawPacket(address, reply) }
-                                currentCode
-                            } else {
-                                peerAuthCodes[address] = receivedCode
-                                receivedCode
-                            }
-                            val peerName = remotePeerName ?: _peers.value[address]?.name ?: "TalkLoop ${address.takeLast(5)}"
-                            addOrUpdatePeer(address, peerName, isConnected = true)
-                            Log.i(TAG, "Synchronized authCode $finalCode with $address ($peerName)")
-                            _connectionRequests.tryEmit(
-                                ConnectionRequest(
-                                    peerId = address,
-                                    peerName = peerName,
-                                    authCode = finalCode
-                                )
-                            )
-                        }
-                    }
-                    VivoLeanProtocol.TYPE_AUDIO_FRAME -> {
-                        _incomingFrames.tryEmit(IncomingFrame(address, packet.payload))
-                    }
-                    VivoLeanProtocol.TYPE_CODEC_REQ -> {
-                        Log.i(TAG, "Received Lean CODEC_REQ mode: 0x${Integer.toHexString(packet.codecMode)} from $address")
-                        val ack = VivoLeanProtocol.encode(type = VivoLeanProtocol.TYPE_CODEC_ACK, codecMode = packet.codecMode)
-                        coroutineScope.launch { writeRawPacket(address, ack) }
-                    }
-                    VivoLeanProtocol.TYPE_CODEC_ACK -> {
-                        Log.i(TAG, "Received Lean CODEC_ACK mode: 0x${Integer.toHexString(packet.codecMode)} from $address")
-                    }
-                    else -> {
-                        _incomingFrames.tryEmit(IncomingFrame(address, data))
-                    }
-                }
-                return
-            }
-        }
-
         // 3. Fallback: Raw unpacketed frame (direct Frame bytes starting with Frame.MAGIC 0x5754)
         _incomingFrames.tryEmit(IncomingFrame(address, data))
 
@@ -656,9 +900,72 @@ class BleGattTransport(private val context: Context) : Transport {
         incomingChunkBuffers.entries.removeIf { now - it.value.timestamp > 10_000 }
     }
 
+    private fun handleLeanControlPacket(address: String, data: ByteArray) {
+        val packet = VivoLeanProtocol.decode(data) ?: return
+        when (packet.type) {
+            VivoLeanProtocol.TYPE_CONNECT_REQ -> {
+                val rawPayload = String(packet.payload, Charsets.UTF_8).trim()
+                val parts = rawPayload.split("|", limit = 3)
+                val receivedCode = parts.firstOrNull().orEmpty()
+                val remotePeerName = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
+                val remoteIdentityKey = parts.getOrNull(2)?.takeIf { it.isValidIdentityHex() }
+                if (receivedCode.length != 6 || receivedCode.any { !it.isDigit() }) {
+                    Log.w(TAG, "Ignoring malformed pairing code from $address")
+                    return
+                }
+
+                // Only the elected client originates this code.  The server
+                // stores and displays it verbatim; it never replaces it with
+                // a competing local code.
+                registerPairingCode(address, receivedCode)
+                val peerName = remotePeerName ?: _peers.value[address]?.name ?: "TalkLoop ${address.takeLast(5)}"
+                addOrUpdatePeer(address, peerName, isConnected = true)
+                Log.i(TAG, "Received pairing code $receivedCode from $address ($peerName)")
+                publishConnectionRequest(ConnectionRequest(address, peerName, receivedCode, remoteIdentityKey))
+                startPairingDeadline(address, peerName)
+            }
+            VivoLeanProtocol.TYPE_AUDIO_FRAME -> _incomingFrames.tryEmit(IncomingFrame(address, packet.payload))
+            VivoLeanProtocol.TYPE_CODEC_REQ -> {
+                Log.i(TAG, "Received Lean CODEC_REQ mode: 0x${Integer.toHexString(packet.codecMode)} from $address")
+                val ack = VivoLeanProtocol.encode(type = VivoLeanProtocol.TYPE_CODEC_ACK, codecMode = packet.codecMode)
+                coroutineScope.launch { writeRawPacket(address, ack) }
+            }
+            VivoLeanProtocol.TYPE_CODEC_ACK ->
+                Log.i(TAG, "Received Lean CODEC_ACK mode: 0x${Integer.toHexString(packet.codecMode)} from $address")
+            VivoLeanProtocol.TYPE_AUTO_CONNECT -> {
+                val parts = String(packet.payload, Charsets.UTF_8).split("|")
+                if (parts.size >= 2 && parts[0] == "PAIR" && parts[1].length == 6 && parts[1].all { it.isDigit() }) {
+                    val peerName = parts.getOrNull(2)?.takeIf { it.isNotBlank() }
+                        ?: _peers.value[address]?.name
+                        ?: "TalkLoop ${address.takeLast(5)}"
+                    val remoteIdentityKey = parts.getOrNull(3)?.takeIf { it.isValidIdentityHex() }
+                    registerPairingCode(address, parts[1])
+                    addOrUpdatePeer(address, peerName, isConnected = true)
+                    Log.i(TAG, "Received pairing receipt from $address ($peerName)")
+                    publishConnectionRequest(ConnectionRequest(address, peerName, parts[1], remoteIdentityKey))
+                    startPairingDeadline(address, peerName)
+                } else if (parts.size >= 2 && parts[0] == "CONFIRM" && parts[1].length == 6 && parts[1].all { it.isDigit() }) {
+                    if (peerAuthCodes[address] != parts[1]) {
+                        Log.w(TAG, "Ignoring pairing confirmation with a stale or mismatched code from $address")
+                        return
+                    }
+                    Log.i(TAG, "Received pairing confirmation from $address")
+                    remotelyConfirmedPairings.add(address)
+                    pairingCompleted(address)
+                    _pairingConfirmations.tryEmit(PairingConfirmation(address, parts[1]))
+                } else if (parts.size >= 2 && parts[0] == "REJECT" && peerAuthCodes[address] == parts[1]) {
+                    reportError("Pairing was rejected on the other phone.")
+                    coroutineScope.launch { disconnect(address) }
+                }
+            }
+            else -> _incomingFrames.tryEmit(IncomingFrame(address, data))
+        }
+    }
+
     override suspend fun startAdvertising(identity: LocalIdentity) {
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
             _state.value = TransportState.ERROR
+            reportError("Bluetooth is unavailable. Turn it on and try again.")
             return
         }
         localDisplayName = identity.endpointName
@@ -667,7 +974,7 @@ class BleGattTransport(private val context: Context) : Transport {
 
         leAdvertiser = bluetoothAdapter.bluetoothLeAdvertiser
         if (leAdvertiser == null) {
-            Log.w(TAG, "BluetoothLeAdvertiser not available on this device")
+            reportError("BLE advertising is not available on this device")
             return
         }
 
@@ -779,7 +1086,10 @@ class BleGattTransport(private val context: Context) : Transport {
     override suspend fun startDiscovery(identity: LocalIdentity) {
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return
         leScanner = bluetoothAdapter.bluetoothLeScanner
-        if (leScanner == null) return
+        if (leScanner == null) {
+            reportError("BLE scanning is not available on this device")
+            return
+        }
 
         val filter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid(SERVICE_UUID))
@@ -807,6 +1117,7 @@ class BleGattTransport(private val context: Context) : Transport {
             Log.i(TAG, "BLE GATT scanning active for Walkie-Talkie peers (LE Coded PHY enabled: ${bluetoothAdapter.isLeCodedPhySupported})")
         } catch (e: Throwable) {
             Log.e(TAG, "startScan failed", e)
+            reportError("BLE discovery could not start: ${e.message ?: e.javaClass.simpleName}")
             _isDiscovering.value = false
         }
     }
@@ -840,14 +1151,55 @@ class BleGattTransport(private val context: Context) : Transport {
             }
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to connect GATT to $peerId", e)
+            reportError("BLE connection could not start: ${e.message ?: e.javaClass.simpleName}")
         }
     }
 
     override suspend fun acceptConnection(peerId: String) {
+        // Receiving the CONNECT_REQ means the server-side GATT link is already
+        // alive.  Opening a second client connection here used to tear down the
+        // stable link on some stacks before authentication could finish.
+        if (serverConnectedDevices.containsKey(peerId) || clientGatts.containsKey(peerId)) return
         connect(peerId)
     }
 
+    override suspend fun confirmPairing(peerId: String, authCode: String) {
+        if (authCode.length != 6 || authCode.any { !it.isDigit() }) return
+        if (peerAuthCodes[peerId] != authCode) {
+            Log.w(TAG, "Ignoring local confirmation with a stale or mismatched code for $peerId")
+            return
+        }
+        val confirmation = VivoLeanProtocol.encode(
+            type = VivoLeanProtocol.TYPE_AUTO_CONNECT,
+            payload = "CONFIRM|$authCode".toByteArray(Charsets.UTF_8)
+        )
+        // GATT notifications and WRITE_TYPE_NO_RESPONSE have no delivery ACK.
+        // Repeat this idempotent control packet so one controller-buffer loss
+        // cannot leave the peers with asymmetric pairing state.
+        repeat(3) { attempt ->
+            writeRawPacket(peerId, confirmation)
+            if (attempt < 2) delay(180L * (attempt + 1))
+        }
+        locallyConfirmedPairings.add(peerId)
+        pairingCompleted(peerId)
+    }
+
     override suspend fun rejectConnection(peerId: String) {
+        peerAuthCodes[peerId]?.let { code ->
+            val rejection = VivoLeanProtocol.encode(
+                type = VivoLeanProtocol.TYPE_AUTO_CONNECT,
+                payload = "REJECT|$code".toByteArray(Charsets.UTF_8)
+            )
+            repeat(2) { attempt ->
+                writeRawPacket(peerId, rejection)
+                if (attempt == 0) delay(180)
+            }
+            // Server-side notifications are serialized asynchronously. Keep
+            // the GATT link alive long enough for REJECT to leave the queue;
+            // otherwise the remote UI only observes a bare disconnect and can
+            // remain on a stale verification screen.
+            delay(650)
+        }
         disconnect(peerId)
     }
 
@@ -862,7 +1214,7 @@ class BleGattTransport(private val context: Context) : Transport {
         }
         peerCharacteristics.remove(peerId)
         peerMtus.remove(peerId)
-        peerAuthCodes.remove(peerId)
+        clearPairingState(peerId)
         serverConnectedDevices.remove(peerId)
         val current = _peers.value.toMutableMap()
         current[peerId]?.let {
@@ -944,19 +1296,8 @@ class BleGattTransport(private val context: Context) : Transport {
         val srv = gattServer
 
         if (srv != null && serverDev != null && srvChar != null) {
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    srv.notifyCharacteristicChanged(serverDev, srvChar, false, packet)
-                } else {
-                    @Suppress("DEPRECATION")
-                    srvChar.value = packet
-                    @Suppress("DEPRECATION")
-                    srv.notifyCharacteristicChanged(serverDev, srvChar, false)
-                }
-                return
-            } catch (e: Throwable) {
-                Log.w(TAG, "Server notifyCharacteristicChanged error", e)
-            }
+            serverNotificationQueue.trySend(ServerNotification(peerId, packet.copyOf()))
+            return
         }
 
         // If not connected yet, trigger auto-connect
@@ -972,6 +1313,8 @@ class BleGattTransport(private val context: Context) : Transport {
 
         reconnectJobs.values.forEach { it.cancel() }
         reconnectJobs.clear()
+        pairingDeadlineJobs.values.forEach { it.cancel() }
+        pairingDeadlineJobs.clear()
         reconnectAttempts.clear()
         intentionallyDisconnectedPeers.clear()
 
@@ -987,6 +1330,10 @@ class BleGattTransport(private val context: Context) : Transport {
         serverConnectedDevices.clear()
         connectingAddresses.clear()
         incomingChunkBuffers.clear()
+        ignoredRotatedScanAddresses.clear()
+        locallyConfirmedPairings.clear()
+        remotelyConfirmedPairings.clear()
+        verifiedPairingAddresses.clear()
 
         try {
             gattServer?.close()

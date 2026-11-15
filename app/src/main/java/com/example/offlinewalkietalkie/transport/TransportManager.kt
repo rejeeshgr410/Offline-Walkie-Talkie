@@ -29,17 +29,21 @@ enum class TransportType {
  * - Wi-Fi Direct / Wi-Fi Aware (Local high-throughput off-grid mesh)
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class TransportManager(private val context: Context) {
+class TransportManager(
+    private val context: Context,
+    private val localIdentityKeyHex: String = ""
+) {
 
     companion object {
         private const val TAG = "TL/TransportManager"
     }
 
-    private val bleGattTransport by lazy { BleGattTransport(context) }
+    private val bleGattTransport by lazy { BleGattTransport(context, localIdentityKeyHex) }
     private val nearbyTransport by lazy { NearbyConnectionsTransport(context) }
     private val bleL2capTransport by lazy { BleL2capTransport(context) }
     private val wifiDirectTransport by lazy { WifiDirectTransport(context) }
     private val wifiAwareTransport by lazy { WifiAwareTransport(context) }
+    private val classicTransport by lazy { com.example.offlinewalkietalkie.transport.bluetooth.BluetoothClassicTransport(context, localIdentityKeyHex) }
 
     private val transports: Map<TransportType, Transport> by lazy {
         mapOf(
@@ -47,7 +51,8 @@ class TransportManager(private val context: Context) {
             TransportType.NEARBY_CONNECTIONS to nearbyTransport,
             TransportType.BLE_L2CAP to bleL2capTransport,
             TransportType.WIFI_DIRECT to wifiDirectTransport,
-            TransportType.WIFI_AWARE to wifiAwareTransport
+            TransportType.WIFI_AWARE to wifiAwareTransport,
+            TransportType.BLUETOOTH_CLASSIC to classicTransport
         )
     }
 
@@ -60,6 +65,10 @@ class TransportManager(private val context: Context) {
     fun setTransportType(type: TransportType): Boolean {
         if (!TransportSelector.isTransportAvailable(context, type)) {
             Log.w(TAG, "Transport $type is not supported on this device. Retaining ${_activeTransportType.value}")
+            return false
+        }
+        if (!transports.containsKey(type)) {
+            Log.e(TAG, "Transport $type was marked available but has no registered implementation")
             return false
         }
         if (_activeTransportType.value != type) {
@@ -80,15 +89,29 @@ class TransportManager(private val context: Context) {
     val connectionRequests: Flow<ConnectionRequest> = _activeTransportType.flatMapLatest { type ->
         (transports[type] ?: bleGattTransport).connectionRequests
     }
+    val pendingConnectionRequests: Flow<ConnectionRequest?> = _activeTransportType.flatMapLatest { type ->
+        (transports[type] ?: bleGattTransport).pendingConnectionRequest
+    }
+
+    val pairingConfirmations: Flow<PairingConfirmation> = _activeTransportType.flatMapLatest { type ->
+        (transports[type] ?: bleGattTransport).pairingConfirmations
+    }
 
     val lastError: StateFlow<String?>
         get() = activeTransport.lastError
 
-    val isAdvertising: StateFlow<Boolean>
-        get() = activeTransport.isAdvertising
+    /** Follows the active bearer, unlike the compatibility getter above. */
+    val lastErrors: Flow<String?> = _activeTransportType.flatMapLatest { type ->
+        (transports[type] ?: bleGattTransport).lastError
+    }
 
-    val isDiscovering: StateFlow<Boolean>
-        get() = activeTransport.isDiscovering
+    val isAdvertising: Flow<Boolean> = _activeTransportType.flatMapLatest { type ->
+        (transports[type] ?: bleGattTransport).isAdvertising
+    }
+
+    val isDiscovering: Flow<Boolean> = _activeTransportType.flatMapLatest { type ->
+        (transports[type] ?: bleGattTransport).isDiscovering
+    }
 
     suspend fun startAdvertising(identity: LocalIdentity) {
         activeTransport.startAdvertising(identity)
@@ -119,6 +142,10 @@ class TransportManager(private val context: Context) {
 
     suspend fun acceptConnection(peerId: String) {
         activeTransport.acceptConnection(peerId)
+    }
+
+    suspend fun confirmPairing(peerId: String, authCode: String) {
+        activeTransport.confirmPairing(peerId, authCode)
     }
 
     suspend fun rejectConnection(peerId: String) {

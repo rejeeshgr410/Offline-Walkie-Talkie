@@ -47,6 +47,12 @@ class RoutingManager(private val transport: TransportManager) {
                 return@onEach
             }
             totalDecoded++
+            // Reliable text must reach its authenticated handler again so a lost
+            // receipt can be resent. The handler deduplicates history separately.
+            if (decodedFrame.type == com.example.offlinewalkietalkie.protocol.FrameType.TEXT) {
+                _incomingFrames.emit(Pair(incoming.peerId, decodedFrame))
+                return@onEach
+            }
             
             val frameHash = generateLogicalHash(decodedFrame)
             

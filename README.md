@@ -30,6 +30,10 @@ As with any communication app, security and reliability depend on device permiss
 
 ## Building locally
 
+See [Project maintenance](PROJECT_MAINTENANCE.md) for the folder layout, cleanup
+archive, and QA build commands. Current device evidence and pending field
+acceptance checks are maintained in [Physical test plan](PHYSICAL_TEST_PLAN.md).
+
 Use Android Studio with JDK 17 and the Android SDK/NDK versions declared by the project. From PowerShell in the repository root:
 
 ```powershell

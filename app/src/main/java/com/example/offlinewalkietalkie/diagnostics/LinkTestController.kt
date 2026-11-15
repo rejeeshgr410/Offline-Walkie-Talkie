@@ -36,6 +36,7 @@ class LinkTestController(
         val now = System.currentTimeMillis()
         pendingPings[now] = now
         totalPingsSent++
+        updateTelemetry()
 
         scope.launch {
             try {
@@ -90,7 +91,10 @@ class LinkTestController(
             rttMs = rollingRttMs,
             packetLossPercent = lossPercent,
             jitterMs = currentJitterMs,
-            qualityBars = bars
+            qualityBars = bars,
+            packetsSent = totalPingsSent,
+            packetsReceived = totalPongsReceived,
+            packetsLost = (totalPingsSent - totalPongsReceived).coerceAtLeast(0)
         )
     }
 

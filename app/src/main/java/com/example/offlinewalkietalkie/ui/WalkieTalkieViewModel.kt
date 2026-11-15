@@ -10,11 +10,17 @@ import android.view.KeyEvent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.offlinewalkietalkie.crypto.CryptoManager
+import com.example.offlinewalkietalkie.diagnostics.LinkTelemetry
+import com.example.offlinewalkietalkie.diagnostics.LinkTestController
+import com.example.offlinewalkietalkie.diagnostics.RedactedDiagnosticsExporter
 import com.example.offlinewalkietalkie.history.VoiceHistoryManager
 import com.example.offlinewalkietalkie.history.VoiceMessage
 import com.example.offlinewalkietalkie.data.OfflineMapArea
 import com.example.offlinewalkietalkie.data.OfflineMapRepository
 import com.example.offlinewalkietalkie.data.OfflineMapPoint
+import com.example.offlinewalkietalkie.crypto.TrustedReconnectProof
+import com.example.offlinewalkietalkie.identity.DirectPeerTrust
+import com.example.offlinewalkietalkie.data.TrustedContactsRepository
 import com.example.offlinewalkietalkie.data.mbtiles.MbTilesPackage
 import com.example.offlinewalkietalkie.data.mbtiles.MbTilesRepository
 import com.example.offlinewalkietalkie.data.mbtiles.MbTile
@@ -61,6 +67,7 @@ import kotlinx.coroutines.flow.*
 import com.example.offlinewalkietalkie.protocol.FloorController
 import com.example.offlinewalkietalkie.protocol.SessionFloorMode
 import com.example.offlinewalkietalkie.service.NotificationController
+import com.example.offlinewalkietalkie.service.ForegroundServiceStartGate
 import com.example.offlinewalkietalkie.service.WalkieTalkieForegroundService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +75,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
@@ -79,23 +87,59 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         private const val GROUP_TICK_INTERVAL_MS = 1_000L
     }
 
-    private val transport = TransportManager(application)
+    private val cryptoManager = CryptoManager(application)
+    private val trustedContactsRepository = TrustedContactsRepository(application)
+    private val transport = TransportManager(application, cryptoManager.getIdentityFingerprintHex())
     private val routingManager = RoutingManager(transport)
     private val voiceEngine = VoiceEngine(codec = AmrNbCodec(), context = application)
     private val offlineMapRepository = OfflineMapRepository(application)
     private val mbTilesRepository = MbTilesRepository(application)
-    private val cryptoManager = CryptoManager()
-
     private val sessionId: Long = System.currentTimeMillis()
+    private val meshRouter = com.example.offlinewalkietalkie.mesh.MeshRelayRouter(sessionId)
+    private var codecNegotiationJob: Job? = null
+    private var codecProposal: com.example.offlinewalkietalkie.voice.CodecProposal? = null
+    private val foregroundServiceStartGate = ForegroundServiceStartGate()
+
+    private val linkTestController = LinkTestController(
+        sendPing = { peerId, timestampMs ->
+            sendEncryptedDiagnosticFrame(
+                peerId = peerId,
+                type = FrameType.PING,
+                payload = ByteBuffer.allocate(Long.SIZE_BYTES).putLong(timestampMs).array()
+            )
+        },
+        scope = viewModelScope
+    )
+    val linkTelemetry: StateFlow<LinkTelemetry> = linkTestController.telemetry
+    private val _isLinkTestRunning = MutableStateFlow(false)
+    val isLinkTestRunning = _isLinkTestRunning.asStateFlow()
+    private val _linkTestStatus = MutableStateFlow("Connect a verified peer to run an offline link test.")
+    val linkTestStatus = _linkTestStatus.asStateFlow()
+    private val _diagnosticsReport = MutableStateFlow<String?>(null)
+    val diagnosticsReport = _diagnosticsReport.asStateFlow()
+    private var linkTestJob: Job? = null
 
     /** viewModelScope is already cancelled by the time onCleared runs, so shutdown needs its own. */
     private val teardownScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val groupPort = GroupNearbyPort(transport, sessionId)
+    private val groupPort = GroupNearbyPort(transport, sessionId) { endpoint, payload ->
+        // Admission secrets must not rely on the bearer being encrypted (GATT is not).
+        // Wait for the human-confirmed identity exchange, then use per-link AEAD.
+        var attempts = 0
+        while (!cryptoManager.hasSessionKey(endpoint) && attempts++ < 50) delay(100)
+        if (cryptoManager.hasSessionKey(endpoint) && isPairingApproved(endpoint)) {
+            sendEncryptedDiagnosticFrame(endpoint, FrameType.GROUP_CONTROL, payload)
+        } else {
+            _transportError.value = "Group admission could not establish an encrypted link. Try joining again."
+        }
+    }
+    private val recoveryStore = runCatching { com.example.offlinewalkietalkie.data.SessionRecoveryStore(application) }.getOrNull()
+    private val savedGroupCheckpoint = runCatching { recoveryStore?.load() }.getOrNull()
 
     val groupManager = GroupSessionManager(
         transport = groupPort,
-        localDisplayName = Build.MODEL
+        localDisplayName = Build.MODEL,
+        localMemberId = savedGroupCheckpoint?.let { runCatching { org.json.JSONObject(it).getString("local") }.getOrNull() }
     )
 
     /** Authoritative view of the group: roster, roles, per-device connection state. */
@@ -128,6 +172,21 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
      */
     private val _pendingRequest = MutableStateFlow<ConnectionRequest?>(null)
     val pendingRequest = _pendingRequest.asStateFlow()
+
+    // A physical GATT link is deliberately not a TalkLoop session.  Both
+    // people must confirm the displayed code before ECDH/auth is allowed.
+    private val pairingCodes = mutableMapOf<String, String>()
+    private val pairingIdentityKeys = mutableMapOf<String, String>()
+    private val locallyConfirmedPairings = mutableSetOf<String>()
+    private val remotelyConfirmedPairings = mutableSetOf<String>()
+    private val autoConfirmingPairings = mutableSetOf<String>()
+    private class PairingAttempt(val request: ConnectionRequest) {
+        var decision: DirectPeerTrust.Decision? = null
+    }
+    private val pairingAttempts = mutableMapOf<String, PairingAttempt>()
+    private val reconnectProofs = mutableMapOf<String, TrustedReconnectProof>()
+    private val reconnectProofDeadlines = mutableMapOf<String, Job>()
+    private val lastAuthReplyAtMs = mutableMapOf<String, Long>()
 
     private val _transportError = MutableStateFlow<String?>(null)
     val transportError = _transportError.asStateFlow()
@@ -185,6 +244,21 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     val textMessages = _textMessages.asStateFlow()
 
     private val requestPrefs = application.getSharedPreferences("intercom_request_policy", 0)
+    val adaptiveAudioEnabled = MutableStateFlow(requestPrefs.getBoolean("adaptive_audio", true))
+    val relayOnlyJoining = MutableStateFlow(requestPrefs.getBoolean("relay_only_join", false))
+    fun setRelayOnlyJoining(enabled: Boolean) {
+        if (groupState.value.isInGroup) {
+            _transportError.value = "Leave the current group before changing relay role."
+            return
+        }
+        relayOnlyJoining.value = enabled
+        requestPrefs.edit().putBoolean("relay_only_join", enabled).apply()
+    }
+
+    fun setAdaptiveAudioEnabled(enabled: Boolean) {
+        adaptiveAudioEnabled.value = enabled
+        requestPrefs.edit().putBoolean("adaptive_audio", enabled).apply()
+    }
     private val _allowIncomingRequests = MutableStateFlow(requestPrefs.getBoolean("allow_incoming", true))
     val allowIncomingRequests = _allowIncomingRequests.asStateFlow()
 
@@ -315,6 +389,67 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     )
 
     init {
+        viewModelScope.launch {
+            while (isActive) {
+                delay(30_000)
+                if (adaptiveAudioEnabled.value && _isInSession.value &&
+                    floorState.value is FloorState.Idle && !_isRecording.value) runLinkTest()
+            }
+        }
+        viewModelScope.launch {
+            savedGroupCheckpoint?.let { groupManager.restoreCheckpoint(it) }
+            groupState.collect { state ->
+                state.others.filter { it.humanVerified && it.endpointId != null }.forEach { member ->
+                    if (!cryptoManager.hasSessionKey(member.endpointId!!)) sendAuthFrame(member.endpointId)
+                }
+                val checkpoint = groupManager.recoveryCheckpoint()
+                // Keep the last admitted checkpoint during transient verification.
+                if (checkpoint != null || !state.isInGroup) withContext(Dispatchers.IO) {
+                    runCatching { recoveryStore?.save(checkpoint) }.onFailure {
+                        _transportError.value = "Session recovery could not be saved securely."
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            androidx.work.WorkManager.getInstance(getApplication())
+                .getWorkInfosForUniqueWorkFlow(com.example.offlinewalkietalkie.data.MapDownloadWorker.UNIQUE_NAME)
+                .collect { jobs ->
+                    val currentId = getApplication<Application>().getSharedPreferences("map_download", 0).getString("work_id", null)
+                    val job = jobs.firstOrNull { it.id.toString() == currentId } ?: return@collect
+                    _offlineMapProgressBytes.value = if (!job.state.isFinished)
+                        job.progress.getLong("bytes", 0L).coerceAtLeast(0) else null
+                    if (job.state == androidx.work.WorkInfo.State.SUCCEEDED) {
+                        withContext(Dispatchers.IO) {
+                            _offlineMapAreas.value = offlineMapRepository.list()
+                            refreshOfflineMapStorage()
+                        }
+                    }
+                    if (job.state == androidx.work.WorkInfo.State.FAILED)
+                        _offlineMapError.value = job.outputData.getString("error")
+                }
+        }
+        if (requestPrefs.getBoolean("resume_requested", false)) {
+            _currentChannelName.value = requestPrefs.getString("resume_name", "Direct Session") ?: "Direct Session"
+            // Never restore authenticated flags or link keys from disk. The existing
+            // trusted-identity discovery path must perform a fresh handshake first.
+            _linkTestStatus.value = "Restoring the previous session; waiting for a verified peer."
+        }
+        viewModelScope.launch {
+            val store = runCatching { withContext(Dispatchers.IO) {
+                com.example.offlinewalkietalkie.data.TextMessageStore(getApplication())
+            } }.getOrElse {
+                _transportError.value = "Encrypted message history is unavailable on this device."
+                return@launch
+            }
+            val saved = runCatching { withContext(Dispatchers.IO) { store.load() } }.getOrDefault(emptyList())
+            _textMessages.value = (saved + _textMessages.value).distinctBy { it.messageId }
+            _textMessages.collect { messages ->
+                runCatching { withContext(Dispatchers.IO) { store.save(messages) } }.onFailure {
+                    _transportError.value = "Message history could not be saved securely."
+                }
+            }
+        }
         WalkieTalkieForegroundService.onPttPressFromHeadset = { requestPtt() }
         WalkieTalkieForegroundService.onPttReleaseFromHeadset = { releasePtt() }
         WalkieTalkieForegroundService.onPttToggleFromNotification = {
@@ -339,7 +474,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             voiceEngine.stopPlayback()
         }
 
-        transport.lastError.onEach { _transportError.value = it }.launchIn(viewModelScope)
+        transport.lastErrors.onEach { _transportError.value = it }.launchIn(viewModelScope)
         transport.isAdvertising.onEach { _isAdvertising.value = it }.launchIn(viewModelScope)
         transport.isDiscovering.onEach { _isDiscovering.value = it }.launchIn(viewModelScope)
         transport.activeTransportType.onEach { _transportType.value = it }.launchIn(viewModelScope)
@@ -354,9 +489,6 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         sosManager.onBroadcastCancel = { senderId ->
             broadcastSosCancelFrame(senderId)
         }
-
-        // Vivo OEM style: Auto-start BLE Long-Range discovery & advertising
-        startNearby()
 
         viewModelScope.launch {
             while (isActive) {
@@ -387,10 +519,29 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                 // which is what makes more than two devices workable.
                 groupManager.onConnectionRequest(request.peerId, advert, request.authCode)
             } else {
-                if (_allowIncomingRequests.value) _pendingRequest.value = request
-                else transport.rejectConnection(request.peerId)
+                handlePairingRequest(request)
             }
         }.launchIn(viewModelScope)
+
+        // StateFlow replay closes the race where a GATT service callback wins
+        // against collection during cold app startup.
+        transport.pendingConnectionRequests.filterNotNull().onEach { request ->
+            Log.i(TAG, "Collected durable pairing request from ${request.peerName} (${request.peerId})")
+            handlePairingRequest(request)
+        }.launchIn(viewModelScope)
+
+        transport.pairingConfirmations.onEach { confirmation ->
+            if (pairingCodes[confirmation.peerId] == confirmation.authCode) {
+                remotelyConfirmedPairings.add(confirmation.peerId)
+                completePairingIfReady(confirmation.peerId)
+            }
+        }.launchIn(viewModelScope)
+
+        // Install the pairing observer before radio work begins.  A nearby
+        // phone can complete GATT service discovery in milliseconds; starting
+        // discovery above this collector lost that initial verification event
+        // because connectionRequests intentionally has replay=0.
+        startNearby()
 
         // Drives connection timeouts, retries, heartbeats and coordinator failover.
         viewModelScope.launch {
@@ -404,7 +555,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             while (isActive) {
                 delay(3000)
-                val unauthed = _peers.value.filter { it.isConnected && !cryptoManager.hasSessionKey(it.id) }
+                val unauthed = _peers.value.filter { it.isConnected && isPairingApproved(it.id) && !isSessionAuthenticated(it.id) }
                 unauthed.forEach { peer ->
                     sendAuthFrame(peer.id)
                 }
@@ -415,9 +566,30 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             val previouslyAuthenticated = _peers.value.count { it.isConnected && it.isAuthenticated }
             val previouslyConnectedIds = _peers.value.filter { it.isConnected }.map { it.id }.toSet()
 
+            // Android BLE privacy can briefly expose one physical handset under
+            // both its retiring and its fresh random address.  Never fan voice
+            // or control frames out to both: choose the authenticated, connected
+            // address for a named handset. Generic scan names remain separate
+            // because they cannot be safely identified as the same person.
+            val canonicalRawPeers = rawPeerList
+                .groupBy { peer ->
+                    if (peer.name.startsWith("TalkLoop") || peer.name.startsWith("Peer ") || peer.name.startsWith("Walkie-Talkie")) {
+                        peer.id
+                    } else {
+                        peer.name.lowercase()
+                    }
+                }
+                .values
+                .mapNotNull { candidates ->
+                    candidates.maxWithOrNull(
+                        compareBy<Peer> { isSessionAuthenticated(it.id) }
+                            .thenBy { it.isConnected }
+                    )
+                }
+
             // Decorate peers with authenticated state from CryptoManager
-            val peerList = rawPeerList.map { p ->
-                p.copy(isAuthenticated = p.isConnected && cryptoManager.hasSessionKey(p.id))
+            val peerList = canonicalRawPeers.map { p ->
+                p.copy(isAuthenticated = p.isConnected && isSessionAuthenticated(p.id))
             }
             _peers.value = peerList
             val connected = peerList.filter { it.isConnected }
@@ -430,13 +602,12 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             // A dropped peer's key has to go with it, otherwise the Security tile keeps
             // counting it and a reconnecting endpoint silently reuses a stale key.
             val connectedIds = connected.mapTo(mutableSetOf()) { it.id }
-            securedPeerIds.filterNot { connectedIds.contains(it) }.forEach { goneId ->
-                cryptoManager.removeSession(goneId)
-                securedPeerIds.remove(goneId)
+            (previouslyConnectedIds - connectedIds).forEach { goneId ->
+                clearPeerPairingState(goneId)
             }
 
             connected.forEach { peer ->
-                if (!cryptoManager.hasSessionKey(peer.id)) {
+                if (isPairingApproved(peer.id) && !isSessionAuthenticated(peer.id)) {
                     sendAuthFrame(peer.id)
                 }
             }
@@ -452,26 +623,73 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         }.launchIn(viewModelScope)
 
         routingManager.incomingFrames.onEach { (peerId, decodedFrame) ->
+            // Candidate ECDH keys on a trusted reconnect cannot carry application traffic.
+            if (decodedFrame.type != FrameType.AUTH && decodedFrame.type != FrameType.AUTH_ACK &&
+                decodedFrame.type != FrameType.GROUP_CONTROL && !isSessionAuthenticated(peerId)) return@onEach
             var shouldForwardControlFrame = false
             when (decodedFrame.type) {
                 FrameType.AUTH -> {
-                    val isNew = !cryptoManager.hasSessionKey(peerId)
-                    cryptoManager.deriveSessionKey(peerId, decodedFrame.payload)
-                    securedPeerIds.add(peerId)
-                    val authedCount = _peers.value.count { it.isConnected && cryptoManager.hasSessionKey(it.id) }
-                    _securedPeerCount.value = authedCount
-                    Log.i(TAG, "AUTH from $peerId - session key established (secured=$authedCount)")
-                    if (isNew) sendAuthFrame(peerId)
-
-                    // Re-evaluate authenticated peers and start session if needed
-                    _peers.value = _peers.value.map { p ->
-                        p.copy(isAuthenticated = p.isConnected && cryptoManager.hasSessionKey(p.id))
+                    // The explicit CONFIRM control packet is sent without a
+                    // transport ACK and can be lost while BLE privacy addresses
+                    // rotate. AUTH is only emitted after the sender confirms.
+                    // Once this phone's user has also confirmed the displayed
+                    // SAS, a received AUTH is safe to treat as the missing
+                    // remote confirmation instead of deadlocking forever.
+                    if (peerId in pairingCodes &&
+                        peerId in locallyConfirmedPairings &&
+                        peerId !in remotelyConfirmedPairings
+                    ) {
+                        Log.i(TAG, "AUTH from $peerId proves remote SAS confirmation")
+                        remotelyConfirmedPairings.add(peerId)
+                        if (_pendingRequest.value?.peerId == peerId) _pendingRequest.value = null
                     }
-                    if (!_isInSession.value) {
-                        val authedPeer = _peers.value.firstOrNull { it.id == peerId && it.isConnected && it.isAuthenticated }
-                        if (authedPeer != null) {
-                            _currentChannelName.value = authedPeer.name
-                            setInSession(true)
+                    if (!isPairingApproved(peerId)) {
+                        Log.w(TAG, "Ignoring AUTH from $peerId until both pairing confirmations arrive")
+                        return@onEach
+                    }
+                    val receivedIdentityKey = cryptoManager.fingerprintPublicKey(decodedFrame.payload)
+                    val advertisedIdentityKey = pairingIdentityKeys[peerId]
+                    if (advertisedIdentityKey != null && advertisedIdentityKey != receivedIdentityKey) {
+                        Log.e(TAG, "Identity key changed between pairing and AUTH for $peerId")
+                        _transportError.value = "Security warning: the peer identity changed during pairing."
+                        clearPeerPairingState(peerId)
+                        transport.rejectConnection(peerId)
+                        return@onEach
+                    }
+                    pairingIdentityKeys[peerId] = receivedIdentityKey
+                    val isNew = !cryptoManager.hasSessionKey(peerId)
+                    if (!cryptoManager.deriveSessionKey(peerId, decodedFrame.payload)) {
+                        Log.w(TAG, "Ignoring invalid AUTH identity key from $peerId")
+                        _transportError.value = "The peer sent an invalid identity key."
+                        return@onEach
+                    }
+                    val now = System.currentTimeMillis()
+                    val lastReply = lastAuthReplyAtMs[peerId] ?: 0L
+                    if (isNew || now - lastReply >= 2_000L) {
+                        lastAuthReplyAtMs[peerId] = now
+                        sendAuthFrame(peerId)
+                    }
+                    val proof = pairingAttempts[peerId]?.let { attempt ->
+                        reconnectProofs.getOrPut(peerId) {
+                            TrustedReconnectProof(cryptoManager, peerId, receivedIdentityKey, attempt.request.authCode)
+                        }
+                    }
+                    if (peerId in autoConfirmingPairings && proof != null && !proof.verified) {
+                        proof.createChallenge()?.let { sendReconnectProof(peerId, it) }
+                        return@onEach
+                    }
+                    finishPeerAuthentication(peerId)
+                }
+                FrameType.AUTH_ACK -> {
+                    if (!isPairingApproved(peerId) || !cryptoManager.hasSessionKey(peerId)) return@onEach
+                    val proof = reconnectProofs[peerId] ?: return@onEach
+                    when (decodedFrame.payload.firstOrNull()) {
+                        TrustedReconnectProof.REQUEST -> proof.replyToChallenge(decodedFrame.payload)?.let {
+                            sendReconnectProof(peerId, it)
+                        }
+                        TrustedReconnectProof.RESPONSE -> if (!proof.verified && proof.verifyResponse(decodedFrame.payload)) {
+                            reconnectProofDeadlines.remove(peerId)?.cancel()
+                            finishPeerAuthentication(peerId)
                         }
                     }
                 }
@@ -486,6 +704,29 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                 FrameType.FLOOR_RELEASE -> {
                     handleFloorRelease(peerId)
                     shouldForwardControlFrame = true
+                }
+                FrameType.CODEC_PROPOSE -> {
+                    val payload = decryptDiagnosticPayload(peerId, decodedFrame)
+                    if (payload?.size == 9 && payload[8].toInt() in 0..1 &&
+                        (payload[8].toInt() == 0 || com.example.offlinewalkietalkie.voice.Codec2Native.isLoaded)) {
+                        sendEncryptedDiagnosticFrame(peerId, FrameType.CODEC_ACCEPT, payload)
+                    }
+                }
+                FrameType.CODEC_ACCEPT -> {
+                    val payload = decryptDiagnosticPayload(peerId, decodedFrame)
+                    if (payload != null) codecProposal?.acknowledge(peerId, payload)
+                }
+                FrameType.MESH -> {
+                    configureMeshLinks()
+                    when (val result = meshRouter.processPacket(peerId, decodedFrame.payload)) {
+                        is com.example.offlinewalkietalkie.mesh.MeshOutcome.DeliveredLocally -> deliverMeshVoice(result.innerPacket)
+                        is com.example.offlinewalkietalkie.mesh.MeshOutcome.DeliveredAndForwarded -> {
+                            deliverMeshVoice(result.innerPacket)
+                            sendMeshPackets(result.rewrappedPackets)
+                        }
+                        is com.example.offlinewalkietalkie.mesh.MeshOutcome.Forwarded -> sendMeshPackets(result.rewrappedPackets)
+                        else -> Unit
+                    }
                 }
                 FrameType.VOICE -> {
                     Log.d(TAG, "VOICE frame from $peerId: encrypted=${decodedFrame.isEncrypted()} authTag=${decodedFrame.authTag != null} seq=${decodedFrame.sequence} payload=${decodedFrame.payload.size}B hasKey=${cryptoManager.hasSessionKey(peerId)}")
@@ -581,9 +822,10 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                 FrameType.TEXT -> {
                     val peerName = _peers.value.find { it.id == peerId }?.name ?: "Peer"
                     val msgKey = "${decodedFrame.sessionId}:${decodedFrame.sequence}"
+                    val plaintext = decryptDiagnosticPayload(peerId, decodedFrame) ?: return@onEach
 
                     val isDuplicate = synchronized(seenTextMessageKeys) {
-                        if (seenTextMessageKeys.contains(msgKey)) {
+                        if (seenTextMessageKeys.contains(msgKey) || _textMessages.value.any { it.messageId == msgKey }) {
                             true
                         } else {
                             if (seenTextMessageKeys.size > 1000) {
@@ -596,28 +838,18 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     }
 
                     // Acknowledge receipt to peer
-                    val ack = Frame(
-                        type = FrameType.ACK,
-                        sequence = decodedFrame.sequence,
-                        sessionId = decodedFrame.sessionId,
-                        timestamp = System.currentTimeMillis().toInt()
-                    )
-                    transport.send(peerId, ack.toBytes())
+                    sendEncryptedDiagnosticFrame(peerId, FrameType.TEXT_ACK,
+                        ByteBuffer.allocate(12).putLong(decodedFrame.sessionId).putInt(decodedFrame.sequence).array())
 
                     if (isDuplicate) {
                         Log.i(TAG, "Duplicate text message $msgKey from $peerName received; dropped from UI, ACK sent")
                     } else {
-                        val content: String? = if (decodedFrame.isEncrypted() && decodedFrame.authTag != null) {
-                            val nonce = generateNonce(decodedFrame.sessionId, decodedFrame.sequence)
-                            val dummyForAad = decodedFrame.copy(hopLimit = 0)
-                            val headerAad = dummyForAad.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
-                            val decrypted = cryptoManager.decrypt(peerId, decodedFrame.payload, decodedFrame.authTag, nonce, headerAad)
-                            decrypted?.let { String(it, Charsets.UTF_8) }
-                        } else null
+                        val content: String? = String(plaintext, Charsets.UTF_8)
 
                         if (content != null) {
                             Log.i(TAG, "Received authenticated encrypted TEXT from $peerName seq=${decodedFrame.sequence} (len=${content.length})")
                             val msg = TextMessage(
+                                messageId = msgKey,
                                 sequence = decodedFrame.sequence,
                                 senderMemberId = decodedFrame.sessionId,
                                 senderName = peerName,
@@ -631,7 +863,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     }
                 }
                 FrameType.ACK -> {
-                    reliableMessageManager.onAckReceived(sessionId, decodedFrame.sequence, peerId)
+                    Log.w(TAG, "Ignoring legacy unauthenticated delivery receipt")
                 }
                 FrameType.KEY_UPDATE -> {
                     // P0-05 Remediation: Decrypt distributed symmetric channel key via pairwise session key
@@ -650,7 +882,18 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                     }
                 }
                 FrameType.GROUP_CONTROL -> {
-                    handleGroupControl(peerId, decodedFrame.payload)
+                    if (decodedFrame.isEncrypted()) {
+                        decryptDiagnosticPayload(peerId, decodedFrame)?.let { handleGroupControl(peerId, it) }
+                    } else if (GroupMessage.decode(decodedFrame.payload) is GroupMessage.MembershipProof) {
+                        handleGroupControl(peerId, decodedFrame.payload)
+                    }
+                }
+                FrameType.TEXT_ACK -> {
+                    val data = decryptDiagnosticPayload(peerId, decodedFrame)
+                    if (data?.size == 12) {
+                        val buffer = ByteBuffer.wrap(data)
+                        reliableMessageManager.onAckReceived(buffer.long, buffer.int, peerId)
+                    }
                 }
                 FrameType.SOS -> {
                     val beacon = SosBeacon.decode(decodedFrame.payload)
@@ -674,23 +917,51 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                 }
                 FrameType.LOCATION_RADAR -> {
                     val loc = PeerLocation.decode(decodedFrame.payload)
-                    if (loc != null) {
+                    if (loc != null && isSanePeerLocation(loc)) {
                         val map = _peerLocations.value.toMutableMap()
-                        map[loc.peerId] = loc
-                        _peerLocations.value = map
+                        val current = map[loc.peerId]
+                        // Delayed radio packets must never move a peer backwards on the map.
+                        if (current == null || loc.timestamp >= current.timestamp) {
+                            map[loc.peerId] = loc
+                            _peerLocations.value = map
+                        }
                     }
+                    shouldForwardControlFrame = true
                 }
                 FrameType.TELEMETRY -> {
                     val tel = PeerTelemetry.decode(decodedFrame.payload)
                     if (tel != null) {
                         telemetryManager.handleIncomingTelemetry(tel)
                     }
+                    shouldForwardControlFrame = true
+                }
+                FrameType.PING -> {
+                    val probe = decryptDiagnosticPayload(peerId, decodedFrame)
+                    if (probe?.size == Long.SIZE_BYTES) {
+                        sendEncryptedDiagnosticFrame(peerId, FrameType.PONG, probe)
+                    } else {
+                        Log.w(TAG, "Dropped unauthenticated or malformed PING from $peerId")
+                    }
+                }
+                FrameType.PONG -> {
+                    val probe = decryptDiagnosticPayload(peerId, decodedFrame)
+                    if (probe?.size == Long.SIZE_BYTES) {
+                        linkTestController.onPongReceived(ByteBuffer.wrap(probe).long)
+                    } else {
+                        Log.w(TAG, "Dropped unauthenticated or malformed PONG from $peerId")
+                    }
                 }
                 else -> {}
             }
-            if (shouldForwardControlFrame && !decodedFrame.isEncrypted() && decodedFrame.hopLimit > 0) {
+            if (shouldForwardControlFrame &&
+                _isRelayModeActive.value &&
+                !decodedFrame.isEncrypted() &&
+                decodedFrame.hopLimit > 0
+            ) {
                 val fwdBytes = decodedFrame.copy(hopLimit = (decodedFrame.hopLimit - 1).toByte()).toBytes()
-                _peers.value.filter { it.isConnected && it.id != peerId }.forEach {
+                _peers.value.filter {
+                    it.isConnected && it.id != peerId && isVoiceTrusted(it.id)
+                }.forEach {
                     transport.send(it.id, fwdBytes)
                 }
             }
@@ -701,7 +972,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
      * Gates voice on authenticated session keys and group verification, not raw transport connectivity. (P0-03 Fix)
      */
     fun isVoiceTrusted(peerId: String): Boolean {
-        if (!cryptoManager.hasSessionKey(peerId)) return false
+        if (!isSessionAuthenticated(peerId)) return false
         val host = _channelHostController.value
         if (host != null) {
             val member = host.membersFlow.value.find { it.endpointId == peerId }
@@ -782,7 +1053,22 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     private fun broadcastVoiceFrame(sequence: Int, encodedFrame: ByteArray) {
         viewModelScope.launch {
-            val activePeers = _peers.value.filter { it.isConnected }
+            if (groupState.value.isInGroup) {
+                configureMeshLinks()
+                val key = meshRouter.channelVoiceKey ?: return@launch
+                val packet = com.example.offlinewalkietalkie.protocol.InnerPacket(
+                    type = FrameType.VOICE,
+                    flags = if (voiceEngine.isSurvivalCodecActive()) Frame.FLAG_CODEC_CODEC2 else Frame.FLAG_CODEC_AMR_NB,
+                    channelId = groupState.value.group!!.groupId.hashCode().toLong(),
+                    memberId = sessionId,
+                    sequence = sequence,
+                    timestamp = System.currentTimeMillis().toInt(),
+                    payload = encodedFrame
+                )
+                sendMeshPackets(meshRouter.originatePacket(packet, key))
+                return@launch
+            }
+            val activePeers = _peers.value.filter { it.isConnected && isSessionAuthenticated(it.id) }
             if (activePeers.isNotEmpty() && (sequence == 1 || sequence % 50 == 0)) {
                 Log.i(TAG, "Sending encrypted VOICE frame $sequence to ${activePeers.size} peer(s), payload=${encodedFrame.size}B")
             }
@@ -819,6 +1105,40 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    private fun configureMeshLinks() {
+        val verified = _peers.value.filter { it.isConnected && isVoiceTrusted(it.id) }
+        val ids = verified.map { it.id }.toSet()
+        meshRouter.linkKeys.keys.toList().filterNot { it in ids }.forEach(meshRouter::unregisterNeighborLink)
+        verified.forEach { peer ->
+            cryptoManager.meshHopKey(peer.id)?.let {
+                meshRouter.registerNeighborLink(peer.id, peer.id.hashCode().toLong(), it)
+            }
+        }
+        meshRouter.channelVoiceKey = groupManager.channelEncryptionKey()
+        meshRouter.isRelayEnabled = _isRelayModeActive.value
+    }
+
+    private suspend fun sendMeshPackets(packets: Map<String, ByteArray>) {
+        packets.forEach { (endpoint, payload) ->
+            transport.send(endpoint, Frame(
+                type = FrameType.MESH, sessionId = sessionId,
+                sequence = controlSequence.getAndIncrement(), hopLimit = 0, payload = payload
+            ).toBytes())
+        }
+    }
+
+    private fun deliverMeshVoice(packet: com.example.offlinewalkietalkie.protocol.InnerPacket) {
+        val group = groupState.value.group ?: return
+        if (packet.type != FrameType.VOICE || packet.channelId != group.groupId.hashCode().toLong()) return
+        voiceEngine.handleIncomingFrame(
+            peerId = "mesh:${packet.memberId}", sequence = packet.sequence,
+            encodedAudio = packet.payload,
+            codecType = com.example.offlinewalkietalkie.protocol.AudioCodecType.fromFlags(packet.flags),
+            senderTimestampMs = packet.timestamp.toLong() and 0xFFFFFFFFL
+        )
+        if (replayBuffer.isEnabled) replayBuffer.onFrameReceived(packet.payload)
+    }
+
     private fun sendControlFrame(targetPeerId: String?, type: FrameType) {
         viewModelScope.launch {
             // Control frames carry no sequence of their own, so without a unique one here
@@ -832,10 +1152,11 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                 hopLimit = 3
             )
             if (targetPeerId != null) {
+                if (!isSessionAuthenticated(targetPeerId)) return@launch
                 routingManager.sendTo(targetPeerId, frame)
             } else {
                 routingManager.markAsSeen(frame)
-                _peers.value.filter { it.isConnected }.forEach { peer ->
+                _peers.value.filter { it.isConnected && isSessionAuthenticated(it.id) }.forEach { peer ->
                     transport.send(peer.id, frame.toBytes())
                 }
             }
@@ -844,6 +1165,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     private fun sendAuthFrame(peerId: String) {
         viewModelScope.launch {
+            if (!isPairingApproved(peerId)) return@launch
             val pubKey = cryptoManager.getPublicKeyBytes()
             val frame = Frame(
                 type = FrameType.AUTH,
@@ -941,6 +1263,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     fun joinGroup(group: DiscoveredGroup) {
         viewModelScope.launch {
+            groupManager.setRelayOnlyJoining(relayOnlyJoining.value)
             Log.i(TAG, "joinGroup '${group.name}' via ${group.coordinatorEndpointId}")
             _currentChannelName.value = group.name
             groupManager.joinGroup(
@@ -960,9 +1283,12 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun leaveGroup() {
+        requestPrefs.edit().remove("resume_requested").remove("resume_name").apply()
+        meshRouter.reset()
         viewModelScope.launch {
             groupManager.leaveGroup()
             setInSession(false)
+            pairingAttempts.keys.toList().forEach(::clearPeerPairingState)
             securedPeerIds.forEach { cryptoManager.removeSession(it) }
             securedPeerIds.clear()
             _securedPeerCount.value = 0
@@ -987,15 +1313,129 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
         return bb.array()
     }
 
+    private suspend fun sendEncryptedDiagnosticFrame(
+        peerId: String,
+        type: FrameType,
+        payload: ByteArray
+    ) {
+        if (!cryptoManager.hasSessionKey(peerId)) return
+        val sequence = controlSequence.getAndIncrement()
+        val frame = Frame(
+            type = type,
+            flags = Frame.FLAG_ENCRYPTED,
+            hopLimit = 0,
+            sessionId = sessionId,
+            sequence = sequence,
+            timestamp = (System.currentTimeMillis() and 0xFFFFFFFFL).toInt(),
+            payload = ByteArray(payload.size)
+        )
+        val nonce = generateNonce(frame.sessionId, frame.sequence)
+        val headerAad = frame.toBytes().copyOfRange(0, Frame.HEADER_SIZE)
+        val encrypted = cryptoManager.encrypt(peerId, payload, nonce, headerAad) ?: return
+        transport.send(
+            peerId,
+            frame.copy(payload = encrypted.first, authTag = encrypted.second).toBytes()
+        )
+    }
+
+    private fun decryptDiagnosticPayload(peerId: String, frame: Frame): ByteArray? {
+        if (!frame.isEncrypted() || frame.authTag == null || !cryptoManager.hasSessionKey(peerId)) return null
+        val nonce = generateNonce(frame.sessionId, frame.sequence)
+        val headerAad = frame.copy(hopLimit = 0).toBytes().copyOfRange(0, Frame.HEADER_SIZE)
+        return cryptoManager.decrypt(peerId, frame.payload, frame.authTag, nonce, headerAad)
+    }
+
+    fun runLinkTest() {
+        if (linkTestJob?.isActive == true) return
+        val peer = _peers.value.firstOrNull { it.isConnected && it.isAuthenticated && cryptoManager.hasSessionKey(it.id) }
+        if (peer == null) {
+            _linkTestStatus.value = "No verified peer is connected."
+            return
+        }
+
+        linkTestController.reset()
+        linkTestController.updateTransportInfo(TransportSelector.getDisplayName(_transportType.value), meshHops = 1)
+        voiceEngine.getJitterBuffer(peer.id)?.metrics?.value?.jitterMs?.let(linkTestController::updateJitter)
+        _diagnosticsReport.value = null
+        linkTestJob = viewModelScope.launch {
+            _isLinkTestRunning.value = true
+            _linkTestStatus.value = "Testing ${peer.name} over the offline link…"
+            try {
+                repeat(8) {
+                    linkTestController.performLinkTest(peer.id)
+                    delay(400)
+                }
+                delay(1_000)
+                val result = linkTestController.telemetry.value
+                if (adaptiveAudioEnabled.value && result.packetsReceived >= 4 && !_isRecording.value) {
+                    setSurvivalCodecMode(result.packetLossPercent >= 12.5f || result.rttMs >= 500)
+                }
+                _linkTestStatus.value = if (result.packetsReceived > 0) {
+                    "Complete • ${result.packetsReceived}/${result.packetsSent} replies"
+                } else {
+                    "No replies received. Check the peer connection."
+                }
+                Log.i(
+                    TAG,
+                    "Offline link test complete: replies=${result.packetsReceived}/${result.packetsSent} " +
+                        "rtt=${result.rttMs}ms loss=${"%.1f".format(result.packetLossPercent)}% " +
+                        "jitter=${"%.1f".format(result.jitterMs)}ms quality=${result.qualityBars}/5"
+                )
+            } finally {
+                _isLinkTestRunning.value = false
+            }
+        }
+    }
+
+    fun generateRedactedDiagnostics(): String? {
+        val telemetry = linkTestController.telemetry.value
+        val report = RedactedDiagnosticsExporter.generateReport(
+            context = getApplication(),
+            activeTransportName = telemetry.transportName,
+            totalPacketsSent = telemetry.packetsSent.toLong(),
+            totalPacketsReceived = telemetry.packetsReceived.toLong(),
+            totalPacketsLost = telemetry.packetsLost.toLong(),
+            averageJitterMs = telemetry.jitterMs,
+            measuredRttMs = telemetry.rttMs
+        )
+        if (!RedactedDiagnosticsExporter.isSafeAndRedacted(report)) {
+            _transportError.value = "Diagnostics privacy validation failed. Nothing was exported."
+            _diagnosticsReport.value = null
+            return null
+        }
+        _diagnosticsReport.value = report
+        return report
+    }
+
+    fun clearDiagnosticsReport() {
+        _diagnosticsReport.value = null
+    }
+
     fun setTransportType(type: TransportType) {
         if (!TransportSelector.isTransportAvailable(getApplication<Application>(), type)) {
             val name = TransportSelector.getDisplayName(type)
-            _transportError.value = "$name is not supported on this device"
+            _transportError.value = TransportSelector.unavailableReason(getApplication<Application>(), type)
+                ?: "$name is not supported on this device"
             Log.w(TAG, "Cannot switch to unsupported transport: $type")
             return
         }
-        _transportType.value = type
-        transport.setTransportType(type)
+        viewModelScope.launch {
+            transport.stop()
+            setInSession(false)
+            meshRouter.reset()
+            codecNegotiationJob?.cancel()
+            if (transport.setTransportType(type)) {
+                _transportType.value = type
+                startNearby()
+                if (type == TransportType.BLUETOOTH_CLASSIC) {
+                    runCatching {
+                        getApplication<Application>().startActivity(Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                            .putExtra(android.bluetooth.BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }.onFailure { _transportError.value = "Open Bluetooth settings to make this phone discoverable." }
+                }
+            }
+        }
     }
 
     /**
@@ -1064,29 +1504,184 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     fun disconnectPeer(peerId: String) {
         Log.i(TAG, "User tapped disconnect -> $peerId")
         viewModelScope.launch {
-            cryptoManager.removeSession(peerId)
-            securedPeerIds.remove(peerId)
+            clearPeerPairingState(peerId)
             transport.disconnect(peerId)
         }
     }
 
     fun acceptConnection(peerId: String) {
         viewModelScope.launch {
+            val attempt = pairingAttempts[peerId] ?: return@launch
+            if (attempt.decision != DirectPeerTrust.Decision.REQUIRE_SAS) return@launch
+            val code = attempt.request.authCode
             transport.acceptConnection(peerId)
-            _pendingRequest.value = null
-            sendAuthFrame(peerId)
+            if (pairingAttempts[peerId] !== attempt) return@launch
+            locallyConfirmedPairings.add(peerId)
+            transport.confirmPairing(peerId, code)
+            if (pairingAttempts[peerId] !== attempt) return@launch
+            completePairingIfReady(peerId)
         }
     }
 
     fun rejectConnection(peerId: String) {
         viewModelScope.launch {
+            clearPeerPairingState(peerId)
             transport.rejectConnection(peerId)
-            _pendingRequest.value = null
         }
     }
 
     fun clearPendingRequest() {
         _pendingRequest.value = null
+    }
+
+    /**
+     * A direct link never authorizes a key exchange merely because GATT is up.
+     * The transport publishes a pairing code for every direct peer; both local
+     * and remote confirmations are required before AUTH is allowed through.
+     * A peer carrying a valid group advert follows the separate group-manager
+     * admission path instead of this direct SAS path.
+     */
+    private fun isPairingApproved(peerId: String): Boolean {
+        // A group advert is only a discovery hint.  It becomes trusted after the
+        // group secret / membership proof succeeds on this exact radio endpoint.
+        val isVerifiedGroupPeer = groupState.value.isTrustedEndpoint(peerId) ||
+            groupState.value.others.any { it.endpointId == peerId && it.humanVerified }
+        return isVerifiedGroupPeer ||
+            (peerId in pairingCodes &&
+                peerId in locallyConfirmedPairings &&
+                peerId in remotelyConfirmedPairings)
+    }
+
+    private fun isSanePeerLocation(location: PeerLocation): Boolean {
+        if (!location.latitude.isFinite() || !location.longitude.isFinite()) return false
+        if (location.latitude !in -90.0..90.0 || location.longitude !in -180.0..180.0) return false
+        // Reject timestamps grossly ahead of the receiving device while accepting
+        // independently clocked offline phones with a five-minute allowance.
+        return location.timestamp <= System.currentTimeMillis() + 5 * 60_000L
+    }
+
+    private fun completePairingIfReady(peerId: String) {
+        if (!isPairingApproved(peerId)) return
+        if (_pendingRequest.value?.peerId == peerId) _pendingRequest.value = null
+        Log.i(TAG, "Pairing confirmed by both phones for $peerId; starting authenticated session")
+        sendAuthFrame(peerId)
+    }
+
+    private suspend fun handlePairingRequest(request: ConnectionRequest) {
+        val previous = pairingAttempts[request.peerId]
+        // A duplicate notification is idempotent. A delayed identity receipt may
+        // replace an unapproved legacy fallback, but never inherit confirmation.
+        // An identity replacement on an approved SAS fails closed.
+        val identityChanged = previous != null && previous.request.identityKeyHex != request.identityKeyHex
+        val unapprovedIdentityReceipt = previous?.request?.identityKeyHex == null &&
+            request.peerId !in locallyConfirmedPairings && !cryptoManager.hasSessionKey(request.peerId)
+        if (previous != null && previous.request.authCode == request.authCode &&
+            identityChanged && !unapprovedIdentityReceipt) {
+            _transportError.value = "Security warning: the peer identity changed during pairing."
+            clearPeerPairingState(request.peerId)
+            transport.rejectConnection(request.peerId)
+            return
+        }
+        val attempt = if (previous?.request == request) previous else {
+            clearPeerPairingState(request.peerId)
+            PairingAttempt(request).also { pairingAttempts[request.peerId] = it }
+        }
+        pairingCodes[request.peerId] = request.authCode
+        request.identityKeyHex?.let { pairingIdentityKeys[request.peerId] = it }
+        if (!_allowIncomingRequests.value) {
+            clearPeerPairingState(request.peerId)
+            transport.rejectConnection(request.peerId)
+            return
+        }
+
+        // One snapshot avoids a key/name lookup race. A suspended lookup must
+        // not approve a request replaced or disconnected in the meantime.
+        val contacts = trustedContactsRepository.contacts.first()
+        if (pairingAttempts[request.peerId] !== attempt) return
+        val decision = attempt.decision ?: DirectPeerTrust.evaluate(request, contacts).also { attempt.decision = it }
+        when (decision) {
+            DirectPeerTrust.Decision.TRUSTED -> {
+                if (autoConfirmingPairings.add(request.peerId)) {
+                    reconnectProofs[request.peerId] = TrustedReconnectProof(
+                        cryptoManager, request.peerId, requireNotNull(request.identityKeyHex), request.authCode)
+                    reconnectProofDeadlines[request.peerId] = viewModelScope.launch {
+                        delay(20_000)
+                        if (pairingAttempts[request.peerId] === attempt &&
+                            reconnectProofs[request.peerId]?.verified == false) {
+                            _transportError.value = "Trusted reconnect authentication timed out. Connect again."
+                            // Remove this job before cleanup so it does not cancel its own rejection.
+                            reconnectProofDeadlines.remove(request.peerId)
+                            clearPeerPairingState(request.peerId)
+                            transport.rejectConnection(request.peerId)
+                        }
+                    }
+                    if (_pendingRequest.value?.peerId == request.peerId) _pendingRequest.value = null
+                    transport.acceptConnection(request.peerId)
+                    if (pairingAttempts[request.peerId] !== attempt) return
+                    locallyConfirmedPairings.add(request.peerId)
+                    transport.confirmPairing(request.peerId, request.authCode)
+                    if (pairingAttempts[request.peerId] !== attempt) return
+                    completePairingIfReady(request.peerId)
+                }
+            }
+            DirectPeerTrust.Decision.IDENTITY_CHANGED -> {
+                _transportError.value = "Security warning: ${request.peerName} presented a different identity key."
+                clearPeerPairingState(request.peerId)
+                transport.rejectConnection(request.peerId)
+            }
+            DirectPeerTrust.Decision.REQUIRE_SAS -> {
+                if (!isPairingApproved(request.peerId)) _pendingRequest.value = request
+            }
+        }
+    }
+
+    private fun isSessionAuthenticated(peerId: String): Boolean =
+        isPairingApproved(peerId) && cryptoManager.hasSessionKey(peerId) &&
+            (peerId !in autoConfirmingPairings || reconnectProofs[peerId]?.verified == true)
+
+    private suspend fun sendReconnectProof(peerId: String, payload: ByteArray) {
+        routingManager.sendTo(peerId, Frame(type = FrameType.AUTH_ACK, payload = payload,
+            sessionId = sessionId, sequence = controlSequence.getAndIncrement(),
+            timestamp = System.currentTimeMillis().toInt(), hopLimit = 1))
+    }
+
+    private suspend fun finishPeerAuthentication(peerId: String) {
+        if (!isSessionAuthenticated(peerId)) return
+        securedPeerIds.add(peerId)
+        val attempt = pairingAttempts[peerId]
+        val identity = pairingIdentityKeys[peerId]
+        // Only direct SAS-approved or proven returning identities enter contacts.
+        // Group membership is a separate authorization path, not SAS verification.
+        if (attempt != null && identity != null) {
+            trustedContactsRepository.trustIdentity(attempt.request.peerName, identity, pairingCodes[peerId].orEmpty())
+        }
+        if (attempt != null && pairingAttempts[peerId] !== attempt) return
+        _peers.value = _peers.value.map { it.copy(isAuthenticated = it.isConnected && isSessionAuthenticated(it.id)) }
+        _securedPeerCount.value = _peers.value.count { it.isAuthenticated }
+        if (!_isInSession.value) {
+            _peers.value.firstOrNull { it.id == peerId && it.isAuthenticated }?.let {
+                _currentChannelName.value = it.name
+                setInSession(true)
+            }
+        }
+    }
+
+    private fun clearPeerPairingState(peerId: String) {
+        pairingAttempts.remove(peerId)
+        reconnectProofs.remove(peerId)
+        reconnectProofDeadlines.remove(peerId)?.cancel()
+        pairingCodes.remove(peerId)
+        pairingIdentityKeys.remove(peerId)
+        locallyConfirmedPairings.remove(peerId)
+        remotelyConfirmedPairings.remove(peerId)
+        autoConfirmingPairings.remove(peerId)
+        lastAuthReplyAtMs.remove(peerId)
+        cryptoManager.removeSession(peerId)
+        securedPeerIds.remove(peerId)
+        _peers.value = _peers.value.map { if (it.id == peerId) it.copy(isAuthenticated = false) else it }
+        _securedPeerCount.value = _peers.value.count { it.isConnected && it.isAuthenticated }
+        if (_securedPeerCount.value == 0 && _isInSession.value) setInSession(false)
+        if (_pendingRequest.value?.peerId == peerId) _pendingRequest.value = null
     }
 
     fun setDisturbanceMode(enabled: Boolean) {
@@ -1100,29 +1695,15 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun downloadOfflineMap(name: String, latitude: Double, longitude: Double, radiusKm: Double) {
-        if (offlineMapJob?.isActive == true) return
-        _offlineMapError.value = null
-        _offlineMapProgressBytes.value = 0L
-        offlineMapJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                offlineMapRepository.download(name, latitude, longitude, radiusKm) { bytes ->
-                    _offlineMapProgressBytes.value = bytes.takeIf { it >= 0L }
-                }
-                _offlineMapAreas.value = offlineMapRepository.list()
-                _offlineMapProgressBytes.value = null
-                refreshOfflineMapStorage()
-            } catch (e: CancellationException) {
-                _offlineMapProgressBytes.value = null
-                throw e
-            } catch (e: Exception) {
-                if (!isActive) return@launch
-                _offlineMapError.value = e.message ?: "Map download failed."
-                _offlineMapProgressBytes.value = null
-            }
-        }
+        com.example.offlinewalkietalkie.data.MapDownloadWorker.enqueue(getApplication(), name, latitude, longitude, radiusKm)
+    }
+
+    fun resumeOfflineMapDownload() {
+        com.example.offlinewalkietalkie.data.MapDownloadWorker.resume(getApplication())
     }
 
     fun cancelOfflineMapDownload() {
+        com.example.offlinewalkietalkie.data.MapDownloadWorker.pause(getApplication())
         offlineMapJob?.cancel()
         viewModelScope.launch(Dispatchers.IO) { offlineMapRepository.cancelActiveDownload() }
         offlineMapProgressBytes.value?.let { _offlineMapProgressBytes.value = null }
@@ -1217,7 +1798,7 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     fun markTextMessagesRead() {
         _textMessages.value = _textMessages.value.map { msg ->
-            if (msg.senderMemberId != sessionId) msg.copy(isRead = true) else msg
+            if (!msg.isOutgoing) msg.copy(isRead = true) else msg
         }
     }
 
@@ -1231,37 +1812,8 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     fun resendTextMessage(messageId: String) {
         val old = _textMessages.value.firstOrNull { it.messageId == messageId } ?: return
-        if (old.status != TextDeliveryStatus.FAILED) return
-        val endpoints = _peers.value.filter { it.isConnected }.map { it.id }
-        if (endpoints.isEmpty()) return
-        _textMessages.value = _textMessages.value.map {
-            if (it.messageId == messageId) it.copy(status = TextDeliveryStatus.SENDING) else it
-        }
-        val frame = Frame(
-            type = FrameType.TEXT,
-            payload = old.content.toByteArray(Charsets.UTF_8),
-            sequence = old.sequence,
-            sessionId = old.senderMemberId,
-            timestamp = old.timestampEpochMs.toInt()
-        )
-        endpoints.forEach { endpoint ->
-            reliableMessageManager.sendReliable(
-                memberId = old.senderMemberId,
-                sequence = old.sequence,
-                endpointId = endpoint,
-                packetBytes = frame.toBytes(),
-                onDelivered = {
-                    _textMessages.value = _textMessages.value.map {
-                        if (it.messageId == messageId) it.copy(status = TextDeliveryStatus.DELIVERED) else it
-                    }
-                },
-                onFailed = {
-                    _textMessages.value = _textMessages.value.map {
-                        if (it.messageId == messageId && it.status == TextDeliveryStatus.SENDING) it.copy(status = TextDeliveryStatus.FAILED) else it
-                    }
-                }
-            )
-        }
+        if (!old.isOutgoing || old.status != TextDeliveryStatus.FAILED) return
+        sendTextMessageInternal(old.content, messageId)
     }
 
     private val _isLoopbackMode = MutableStateFlow(false)
@@ -1277,14 +1829,39 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun toggleSurvivalCodecMode() {
-        val next = !_isSurvivalCodecMode.value
-        _isSurvivalCodecMode.value = next
-        voiceEngine.setSurvivalCodecMode(next)
+        setSurvivalCodecMode(!_isSurvivalCodecMode.value)
     }
 
     fun setSurvivalCodecMode(enabled: Boolean) {
-        _isSurvivalCodecMode.value = enabled
-        voiceEngine.setSurvivalCodecMode(enabled)
+        if (enabled && !com.example.offlinewalkietalkie.voice.Codec2Native.isLoaded) {
+            _transportError.value = "Low-bitrate audio is unavailable on this device."
+            return
+        }
+        if (_isRecording.value) {
+            _transportError.value = "Release Talk before changing audio mode."
+            return
+        }
+        codecNegotiationJob?.cancel()
+        codecNegotiationJob = viewModelScope.launch {
+            val endpoints = _peers.value.filter { it.isConnected && isVoiceTrusted(it.id) }.map { it.id }.toSet()
+            val proposal = com.example.offlinewalkietalkie.voice.CodecProposal(endpoints, enabled)
+            codecProposal = proposal
+            val payload = proposal.payload
+            if (endpoints.isNotEmpty()) {
+                repeat(3) {
+                    proposal.pending().forEach { sendEncryptedDiagnosticFrame(it, FrameType.CODEC_PROPOSE, payload) }
+                    delay(500)
+                }
+                if (!proposal.canCommit(_peers.value.filter { it.isConnected && isVoiceTrusted(it.id) }.map { it.id }.toSet())) {
+                    _transportError.value = "Audio mode unchanged: not every verified peer acknowledged the change."
+                    return@launch
+                }
+            }
+            if (!_isRecording.value) {
+                _isSurvivalCodecMode.value = enabled
+                voiceEngine.setSurvivalCodecMode(enabled)
+            }
+        }
     }
 
     fun toggleRelayMode() {
@@ -1311,12 +1888,18 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
 
     fun setInSession(inSession: Boolean) {
         _isInSession.value = inSession
+        if (inSession) requestPrefs.edit().putBoolean("resume_requested", true)
+            .putString("resume_name", _currentChannelName.value).apply()
         if (!inSession) {
             _isMuted.value = false
             voiceEngine.isRealtimeMuted = false
         }
         if (inSession) {
-            startBackgroundService()
+            if (foregroundServiceStartGate.onSessionChanged(active = true)) {
+                startBackgroundService()
+            } else {
+                Log.i(TAG, "Foreground notification deferred until the app is visible")
+            }
             // The handshake is over; a leftover request would send the pairing screen
             // straight back up the moment it is dismissed.
             _pendingRequest.value = null
@@ -1324,9 +1907,21 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             voiceEngine.setSpeakerphone(_speakerphoneEnabled.value)
             Log.i(TAG, "Session started: speaker=${_speakerphoneEnabled.value}")
         } else {
+            foregroundServiceStartGate.onSessionChanged(active = false)
             stopBackgroundService()
             voiceEngine.routeManager?.clearRouting()
         }
+    }
+
+    /** Called by the activity while it has a visible window for Android 12+ FGS policy. */
+    fun onActivityVisible() {
+        if (foregroundServiceStartGate.onActivityVisible()) {
+            startBackgroundService()
+        }
+    }
+
+    fun onActivityHidden() {
+        foregroundServiceStartGate.onActivityHidden()
     }
 
     fun setChannelName(name: String) {
@@ -1417,20 +2012,30 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun sendTextMessage(content: String) {
+        sendTextMessageInternal(content)
+    }
+
+    private fun sendTextMessageInternal(content: String, retryId: String? = null) {
         val seq = controlSequence.getAndIncrement()
-        val connectedPeers = _peers.value.filter { it.isConnected }.distinctBy { it.name }
+        val connectedPeers = _peers.value.filter { it.isConnected && isSessionAuthenticated(it.id) }.distinctBy { it.name }
         Log.i(TAG, "sendTextMessage (len=${content.length}) to ${connectedPeers.size} peer(s)")
         val textMsg = TextMessage(
+            messageId = retryId ?: java.util.UUID.randomUUID().toString(),
+            isOutgoing = true,
             sequence = seq,
             senderMemberId = sessionId,
             senderName = Build.MODEL,
             content = content,
             status = if (connectedPeers.isNotEmpty()) TextDeliveryStatus.SENDING else TextDeliveryStatus.FAILED
         )
-        _textMessages.value = _textMessages.value + textMsg
+        _textMessages.value = _textMessages.value.filterNot { it.messageId == textMsg.messageId } + textMsg
 
         val payload = content.toByteArray(Charsets.UTF_8)
         if (connectedPeers.isEmpty()) return
+        val awaitingReceipts = java.util.concurrent.ConcurrentHashMap.newKeySet<String>().apply {
+            addAll(connectedPeers.map { it.id })
+        }
+        val deliveryFailed = java.util.concurrent.atomic.AtomicBoolean(false)
 
         // P0-04 Remediation: Encrypt text messages per-peer with AES-256-GCM session keys
         connectedPeers.forEach { peer ->
@@ -1463,11 +2068,14 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
                 endpointId = peer.id,
                 packetBytes = frame.toBytes(),
                 onDelivered = {
+                    awaitingReceipts.remove(peer.id)
+                    if (awaitingReceipts.isNotEmpty() || deliveryFailed.get()) return@sendReliable
                     _textMessages.value = _textMessages.value.map { current ->
                         if (current.messageId == textMsg.messageId) current.copy(status = TextDeliveryStatus.DELIVERED) else current
                     }
                 },
                 onFailed = {
+                    deliveryFailed.set(true)
                     _textMessages.value = _textMessages.value.map { current ->
                         if (current.messageId == textMsg.messageId && current.status == TextDeliveryStatus.SENDING) current.copy(status = TextDeliveryStatus.FAILED) else current
                     }
@@ -1477,6 +2085,10 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun requestPtt() {
+        if (groupState.value.isInGroup && groupManager.relayOnly) {
+            _transportError.value = "Relay-only participants forward packets without transmitting or listening."
+            return
+        }
         val current = floorController.floorState.value
         if (current !is FloorState.Idle) return
         if (_isRecording.value) return
@@ -1623,9 +2235,15 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             timestamp = System.currentTimeMillis().toInt(),
             payload = payload
         )
-        val bytes = frame.toBytes()
-        _peers.value.filter { it.isConnected }.forEach {
-            transport.send(it.id, bytes)
+        val targets = _peers.value.filter { it.isConnected && isVoiceTrusted(it.id) }
+        if (targets.isEmpty()) {
+            Log.d(TAG, "Location update held: no verified link is available")
+            return
+        }
+        Log.d(TAG, "Broadcasting location to ${targets.size} verified peer(s)")
+        targets.forEach {
+            // Marking the source frame as seen makes a later mesh echo harmless.
+            routingManager.sendTo(it.id, frame)
         }
     }
 
@@ -1765,6 +2383,19 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
             } else {
                 app.startService(intent)
             }
+        } catch (e: SecurityException) {
+            // A microphone FGS also requires a foreground activity on Android 14+.
+            foregroundServiceStartGate.onStartDenied()
+            Log.w(TAG, "Foreground service start deferred until permissions are usable: ${e.message}")
+        } catch (e: RuntimeException) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                e is android.app.ForegroundServiceStartNotAllowedException
+            ) {
+                foregroundServiceStartGate.onStartDenied()
+                Log.w(TAG, "Foreground service start deferred by Android policy: ${e.message}")
+            } else {
+                Log.w(TAG, "Foreground service start failed: ${e.message}")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Foreground service start failed: ${e.message}")
         }
@@ -1800,14 +2431,22 @@ class WalkieTalkieViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun leaveSession() {
+        requestPrefs.edit().remove("resume_requested").remove("resume_name").apply()
+        meshRouter.reset()
+        codecNegotiationJob?.cancel()
         voiceEngine.stopRecording()
         voiceEngine.stopPlayback()
         // Routed through setInSession so the audio mode and volumes are handed back;
         // setting the flag directly leaves the device in MODE_IN_COMMUNICATION.
         setInSession(false)
+        pairingAttempts.keys.toList().forEach(::clearPeerPairingState)
         securedPeerIds.forEach { cryptoManager.removeSession(it) }
         securedPeerIds.clear()
         _securedPeerCount.value = 0
-        viewModelScope.launch { transport.stop() }
+        viewModelScope.launch {
+            if (groupState.value.isInGroup) groupManager.leaveGroup()
+            withContext(Dispatchers.IO) { recoveryStore?.save(null) }
+            transport.stop()
+        }
     }
 }

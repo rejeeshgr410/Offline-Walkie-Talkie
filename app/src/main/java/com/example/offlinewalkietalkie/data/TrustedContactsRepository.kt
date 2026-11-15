@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
+import java.security.MessageDigest
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "talkloop_contacts")
 
@@ -87,5 +88,31 @@ class TrustedContactsRepository(private val context: Context) {
     suspend fun isContactTrusted(publicKeyHex: String): Boolean {
         val list = contacts.first()
         return list.any { it.publicKeyHex == publicKeyHex && it.isVerified }
+    }
+
+    suspend fun findTrustedByPublicKey(publicKeyHex: String): TrustedContact? =
+        contacts.first().firstOrNull { it.publicKeyHex == publicKeyHex && it.isVerified }
+
+    suspend fun findTrustedByDisplayName(displayName: String): TrustedContact? {
+        val normalized = displayName.trim().lowercase()
+        return contacts.first().firstOrNull {
+            it.isVerified && it.displayName.trim().lowercase() == normalized
+        }
+    }
+
+    suspend fun trustIdentity(displayName: String, publicKeyHex: String, sasCode: String) {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(publicKeyHex.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        saveContact(
+            TrustedContact(
+                contactId = digest.take(24),
+                displayName = displayName,
+                publicKeyHex = publicKeyHex,
+                sasCode = sasCode,
+                isVerified = true,
+                lastSeen = System.currentTimeMillis()
+            )
+        )
     }
 }

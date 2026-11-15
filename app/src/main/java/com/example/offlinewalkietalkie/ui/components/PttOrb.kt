@@ -24,12 +24,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.offlinewalkietalkie.R
 import com.example.offlinewalkietalkie.protocol.FloorState
 import com.example.offlinewalkietalkie.theme.*
 
@@ -89,20 +94,39 @@ fun PttOrb(
     )
 
     val stateText = when (floorState) {
-        is FloorState.HeldByMe, is FloorState.Talking, is FloorState.Granted -> "Transmitting"
-        is FloorState.Requesting -> "Connecting…"
-        is FloorState.HeldByOther -> "${floorState.peerName} Speaking"
-        is FloorState.Denied -> "Channel Busy"
-        is FloorState.Releasing -> "Ending…"
-        is FloorState.Idle -> "Hold to Talk"
+        is FloorState.HeldByMe, is FloorState.Talking, is FloorState.Granted -> stringResource(R.string.ptt_transmitting)
+        is FloorState.Requesting -> stringResource(R.string.connecting)
+        is FloorState.HeldByOther -> stringResource(R.string.ptt_peer_speaking, floorState.peerName)
+        is FloorState.Denied -> stringResource(R.string.ptt_channel_busy)
+        is FloorState.Releasing -> stringResource(R.string.ptt_ending)
+        is FloorState.Idle -> stringResource(R.string.hold_to_talk)
     }
+    val pttAccessibility = stringResource(R.string.ptt_accessibility, stateText)
+    val accessibilityActionLabel = stringResource(
+        if (isPressed || isTalking) R.string.ptt_stop_transmitting else R.string.ptt_start_transmitting
+    )
 
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .size(248.dp)
             .semantics {
-                contentDescription = "Push to Talk button. Status: $stateText. Hold down to speak."
+                contentDescription = pttAccessibility
+                role = Role.Button
+                onClick(label = accessibilityActionLabel) {
+                    if (heldByOther) {
+                        false
+                    } else {
+                        isPressed = !isPressed
+                        if (isPressed) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onPressStart()
+                        } else {
+                            onPressEnd()
+                        }
+                        true
+                    }
+                }
             }
     ) {
         // 1. Soft radiating ambient red halo

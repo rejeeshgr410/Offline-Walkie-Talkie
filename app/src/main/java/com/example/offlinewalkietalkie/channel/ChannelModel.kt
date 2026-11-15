@@ -46,7 +46,8 @@ data class TextMessage(
     val content: String,
     val timestampEpochMs: Long = System.currentTimeMillis(),
     val status: TextDeliveryStatus = TextDeliveryStatus.SENDING,
-    val isRead: Boolean = false
+    val isRead: Boolean = false,
+    val isOutgoing: Boolean = false
 )
 
 data class ReplayTransmission(

@@ -14,7 +14,10 @@ data class LinkTelemetry(
     val qualityBars: Int = 5, // 1 to 5 signal bars
     val transportName: String = "Nearby Connections",
     val meshHopCount: Int = 1,
-    val isReconnecting: Boolean = false
+    val isReconnecting: Boolean = false,
+    val packetsSent: Int = 0,
+    val packetsReceived: Int = 0,
+    val packetsLost: Int = 0
 ) {
     companion object {
         /**

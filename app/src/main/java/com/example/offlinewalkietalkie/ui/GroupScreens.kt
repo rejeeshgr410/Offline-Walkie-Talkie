@@ -19,11 +19,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.offlinewalkietalkie.R
 import com.example.offlinewalkietalkie.group.DiscoveredGroup
 import com.example.offlinewalkietalkie.group.GroupMember
 import com.example.offlinewalkietalkie.group.GroupRole
@@ -61,15 +64,15 @@ fun GroupLobbyScreen(
         Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                 }
                 Column {
                     Text(
-                        text = "Connect Devices",
+                        text = stringResource(R.string.connect_devices),
                         style = AppleTitle2
                     )
                     Text(
-                        text = "Host or join an offline mesh talk group",
+                        text = stringResource(R.string.group_lobby_subtitle),
                         style = AppleFootnote,
                         color = AppleTextSecondary
                     )
@@ -81,12 +84,12 @@ fun GroupLobbyScreen(
             GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp)) {
                     Text(
-                        text = "START A NEW GROUP",
+                        text = stringResource(R.string.start_new_group),
                         style = AppleCaption2
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "You become the host. Nearby devices can discover and join your channel.",
+                        text = stringResource(R.string.start_new_group_desc),
                         style = AppleFootnote,
                         color = AppleTextSecondary
                     )
@@ -94,7 +97,7 @@ fun GroupLobbyScreen(
                     OutlinedTextField(
                         value = groupName,
                         onValueChange = { groupName = it.take(20) },
-                        placeholder = { Text("Channel Name", style = AppleFootnote) },
+                        placeholder = { Text(stringResource(R.string.channel_name), style = AppleFootnote) },
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -122,7 +125,7 @@ fun GroupLobbyScreen(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) {
-                        Text("Create Channel", fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.create_channel), fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -130,7 +133,7 @@ fun GroupLobbyScreen(
             Spacer(Modifier.height(24.dp))
 
             Text(
-                text = "NEARBY CHANNELS",
+                text = stringResource(R.string.nearby_channels),
                 style = AppleCaption2,
                 modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
             )
@@ -148,7 +151,7 @@ fun GroupLobbyScreen(
                         )
                         Spacer(Modifier.width(14.dp))
                         Text(
-                            text = "Scanning for nearby channels…",
+                            text = stringResource(R.string.scanning_channels),
                             style = AppleBody,
                             color = AppleTextSecondary
                         )
@@ -185,7 +188,7 @@ private fun DiscoveredGroupCard(
                     style = AppleHeadline
                 )
                 Text(
-                    text = "${group.devicesVisible} device${if (group.devicesVisible == 1) "" else "s"} broadcasting",
+                    text = pluralStringResource(R.plurals.devices_broadcasting, group.devicesVisible, group.devicesVisible),
                     style = AppleFootnote,
                     color = AppleTextSecondary
                 )
@@ -200,7 +203,7 @@ private fun DiscoveredGroupCard(
                 modifier = Modifier.height(36.dp),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                Text("Join", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(stringResource(R.string.join), fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
         }
     }
@@ -235,15 +238,15 @@ fun GroupRoomScreen(
         Column(Modifier.fillMaxSize()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                 }
                 Column {
                     Text(
-                        text = group?.name ?: "Group",
+                        text = group?.name ?: stringResource(R.string.group),
                         style = AppleTitle2
                     )
                     Text(
-                        text = if (state.isCoordinator) "You are the channel host" else "Host: ${state.coordinator?.displayName ?: "…"}",
+                        text = if (state.isCoordinator) stringResource(R.string.you_are_host) else stringResource(R.string.host_name, state.coordinator?.displayName ?: "…"),
                         style = AppleFootnote,
                         color = AppleSystemTeal
                     )
@@ -255,19 +258,19 @@ fun GroupRoomScreen(
             GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
                     Text(
-                        text = "${state.liveMemberCount} of ${state.members.size} devices connected",
+                        text = stringResource(R.string.group_connected_count, state.liveMemberCount, state.members.size),
                         style = AppleHeadline
                     )
                     if (state.pending.isNotEmpty()) {
                         Text(
-                            text = "${state.pending.size} still connecting…",
+                            text = stringResource(R.string.still_connecting_count, state.pending.size),
                             style = AppleFootnote,
                             color = AppleSystemOrange
                         )
                     }
                     if (state.failed.isNotEmpty()) {
                         Text(
-                            text = "${state.failed.size} connection failure",
+                            text = pluralStringResource(R.plurals.connection_failure_count, state.failed.size, state.failed.size),
                             style = AppleFootnote,
                             color = AppleSystemRed
                         )
@@ -292,7 +295,7 @@ fun GroupRoomScreen(
 
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "To add another phone: open TalkLoop on it, tap Connect Devices, and select \"${group?.name ?: ""}\".",
+                    text = stringResource(R.string.add_phone_help, group?.name ?: ""),
                     style = AppleFootnote,
                     color = AppleTextTertiary,
                     textAlign = TextAlign.Center,
@@ -315,7 +318,7 @@ fun GroupRoomScreen(
                 modifier = Modifier.fillMaxWidth().height(50.dp)
             ) {
                 Text(
-                    text = if (state.connected.isEmpty()) "Waiting for peers…" else "Start Talking",
+                    text = if (state.connected.isEmpty()) stringResource(R.string.waiting_for_peers) else stringResource(R.string.start_talking),
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )
@@ -329,7 +332,7 @@ fun GroupRoomScreen(
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = AppleSystemRed),
                 modifier = Modifier.fillMaxWidth().height(46.dp)
             ) {
-                Text("Leave Channel", fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.leave_channel), fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -374,14 +377,14 @@ private fun MemberRow(
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (isLocal) "${member.displayName} (You)" else member.displayName,
+                        text = if (isLocal) stringResource(R.string.name_you, member.displayName) else member.displayName,
                         style = AppleHeadline,
                         fontSize = 14.sp
                     )
                     if (member.role == GroupRole.COORDINATOR) {
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "HOST",
+                            text = stringResource(R.string.host_badge),
                             color = AppleSystemTeal,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.ExtraBold,
@@ -399,7 +402,7 @@ private fun MemberRow(
                 )
                 if (member.state == MemberState.PENDING_APPROVAL && member.authCode != null) {
                     Text(
-                        text = "Auth Code: ${member.authCode}",
+                        text = stringResource(R.string.auth_code, member.authCode),
                         style = AppleMonospacedDigits.copy(color = AppleTextPrimary, fontSize = 14.sp)
                     )
                 }
@@ -408,15 +411,15 @@ private fun MemberRow(
             when {
                 member.state == MemberState.PENDING_APPROVAL -> {
                     IconButton(onClick = onAccept) {
-                        Icon(Icons.Default.Check, contentDescription = "Accept", tint = AppleSystemGreen)
+                        Icon(Icons.Default.Check, contentDescription = stringResource(R.string.accept), tint = AppleSystemGreen)
                     }
                     IconButton(onClick = onDecline) {
-                        Icon(Icons.Default.Close, contentDescription = "Decline", tint = AppleSystemRed)
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.decline), tint = AppleSystemRed)
                     }
                 }
                 member.state == MemberState.FAILED && !isLocal -> {
                     IconButton(onClick = onRemove) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Retry", tint = AppleSystemOrange)
+                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.retry), tint = AppleSystemOrange)
                     }
                 }
                 member.state == MemberState.CONNECTING ||
@@ -432,16 +435,17 @@ private fun MemberRow(
     }
 }
 
+@Composable
 private fun statusLabel(member: GroupMember, isLocal: Boolean): String = when {
-    isLocal -> "This device"
-    member.state == MemberState.CONNECTED && !member.isDirect -> "Connected via relay"
-    member.state == MemberState.CONNECTED -> "Connected"
-    member.state == MemberState.CONNECTING -> "Connecting…"
-    member.state == MemberState.PENDING_APPROVAL -> "Wants to join"
-    member.state == MemberState.RECONNECTING -> "Reconnecting…"
-    member.state == MemberState.FAILED -> member.failureReason ?: "Could not connect"
-    member.state == MemberState.DISCOVERED -> "Found nearby"
-    member.state == MemberState.LEFT -> "Left channel"
+    isLocal -> stringResource(R.string.this_device)
+    member.state == MemberState.CONNECTED && !member.isDirect -> stringResource(R.string.connected_via_relay)
+    member.state == MemberState.CONNECTED -> stringResource(R.string.connected)
+    member.state == MemberState.CONNECTING -> stringResource(R.string.connecting)
+    member.state == MemberState.PENDING_APPROVAL -> stringResource(R.string.wants_to_join)
+    member.state == MemberState.RECONNECTING -> stringResource(R.string.reconnecting)
+    member.state == MemberState.FAILED -> member.failureReason ?: stringResource(R.string.could_not_connect)
+    member.state == MemberState.DISCOVERED -> stringResource(R.string.found_nearby)
+    member.state == MemberState.LEFT -> stringResource(R.string.left_channel)
     else -> ""
 }
 

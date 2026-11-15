@@ -7,6 +7,11 @@ import com.example.offlinewalkietalkie.crypto.TinkCryptoEngine
  * hop-by-hop OuterPacket and end-to-end InnerPacket per Section 19.1.
  */
 class TwoLayerCodec(private val cryptoEngine: TinkCryptoEngine = TinkCryptoEngine()) {
+    fun sealInner(packet: InnerPacket, key: ByteArray): ByteArray =
+        cryptoEngine.encrypt(key, cryptoEngine.generateNonce(), packet.encode())
+
+    private fun outerAad(sender: Long, hops: Byte): ByteArray =
+        java.nio.ByteBuffer.allocate(9).putLong(sender).put(hops).array()
 
     /**
      * Seals an InnerPacket into an OuterPacket for transmission over the local radio link.
@@ -34,7 +39,7 @@ class TwoLayerCodec(private val cryptoEngine: TinkCryptoEngine = TinkCryptoEngin
             key = hopKey,
             nonce = outerNonce,
             plaintext = encryptedInner,
-            associatedData = byteArrayOf((senderNodeId ushr 56).toByte(), (senderNodeId ushr 48).toByte())
+            associatedData = outerAad(senderNodeId, innerPacket.hopLimit)
         )
 
         // Extract 12-byte nonce (if prepended by Tink), ciphertext, and 16-byte auth tag
@@ -79,7 +84,7 @@ class TwoLayerCodec(private val cryptoEngine: TinkCryptoEngine = TinkCryptoEngin
         val outerPacket = OuterPacket.decode(wireBytes) ?: return null
 
         val combinedForTink = outerPacket.nonce + outerPacket.ciphertext + outerPacket.authTag
-        val associatedData = byteArrayOf((outerPacket.senderNodeId ushr 56).toByte(), (outerPacket.senderNodeId ushr 48).toByte())
+        val associatedData = outerAad(outerPacket.senderNodeId, outerPacket.hopLimit)
 
         return try {
             val innerCiphertext = cryptoEngine.decrypt(
@@ -130,7 +135,7 @@ class TwoLayerCodec(private val cryptoEngine: TinkCryptoEngine = TinkCryptoEngin
             key = newHopKey,
             nonce = outerNonce,
             plaintext = innerCiphertext,
-            associatedData = byteArrayOf((newSenderNodeId ushr 56).toByte(), (newSenderNodeId ushr 48).toByte())
+            associatedData = outerAad(newSenderNodeId, hopLimit)
         )
 
         val nonce = encryptedOuterWithTag.copyOfRange(0, 12)

@@ -1,8 +1,8 @@
 # TalkLoop Hardware Compatibility & Field Benchmark Matrix
 
 **Product**: TalkLoop (Zero-Cloud Offline Walkie-Talkie & Mesh Intercom)  
-**Version**: Production Release 1.0.0 (Phase A, B, C & D Complete)  
-**Tested APK Hash (SHA-256)**: `E7450ED3C523D2CEFF9709F685562E8262EB52C1F67B41659AC5C3F21FE9942C`
+**Version**: Engineering compatibility target — not a production qualification record
+**Tested APK Hash (SHA-256)**: `AA813DF7FCA15208D072749C18055166ABBC80C9772C761E76BE0EBF59F51BCC` (production-package signed release artifact, 2026-11-12)
 
 ---
 
@@ -22,35 +22,35 @@ TalkLoop is designed to operate completely offline without cellular connectivity
 
 ### A. Voice Latency (Mouth-to-Ear)
 
-Measured under active pairwise link between Pixel 6 and Samsung Galaxy J8:
+These are target formats. Current build latency and loss require fresh two-device measurement:
 
 | Speech Mode | Codec & Sampling | Frame Size | Bitrate | Measured Playout Latency | Buffer Underrun Rate |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Natural Voice Clarity** | AMR-NB (8000 Hz) | 32 bytes (20ms) | 7.4 kbps | **68 ms – 92 ms** | 0.00% |
-| **Survival Range Mode** | Codec 2 Mode 1600 (8000 Hz) | 8 bytes (40ms) | 1.6 kbps | **85 ms – 118 ms** | 0.00% |
+| **Natural Voice Clarity** | AMR-NB (8000 Hz) | 32 bytes (20ms) | 7.4 kbps | Measure during release testing | Measure during release testing |
+| **Survival Range Mode** | Codec 2 Mode 1600 (8000 Hz) | 8 bytes (40ms) | 1.6 kbps | Measure during release testing | Measure during release testing |
 
 > [!NOTE]
-> Adaptive Jitter Buffer dynamically scales target delay between **60 ms and 200 ms** based on real-time RFC 3550 inter-arrival jitter estimation.
+> The jitter buffer has a software target policy, but latency and loss values in this matrix need release-candidate measurements.
 
 ### B. RF Range & Link Resilience
 
 | Environment | Direct BLE GATT Range | Codec 2 Penetration Cutoff | AMR-NB Cutoff | Mesh Relay Coverage (2 Hops) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Open Field / Line-of-Sight** | 75 m – 105 m | -98 dBm (Operable) | -91 dBm | **Up to 180 m** |
-| **Dense Indoor / Partition Walls** | 20 m – 35 m | -96 dBm (Operable) | -88 dBm | **Up to 60 m** |
-| **Deep Forest / Mountain Ridge** | 45 m – 70 m | -97 dBm (Operable) | -90 dBm | **Up to 125 m** |
+| **Open Field / Line-of-Sight** | To be measured | To be measured | To be measured | No range claim before field testing |
+| **Dense Indoor / Partition Walls** | To be measured | To be measured | To be measured | No range claim before field testing |
+| **Deep Forest / Mountain Ridge** | To be measured | To be measured | To be measured | No range claim before field testing |
 
 ---
 
 ## 3. Battery Consumption Metrics
 
-Benchmarked on physical hardware over a 4-hour background testing cycle:
+Battery metrics require a release-candidate background soak on each supported hardware class:
 
 | Scenario | Handset | Screen State | Power Drain Rate | Note |
 | :--- | :--- | :--- | :--- | :--- |
-| **Background BLE Standby** | Google Pixel 6 | Screen Off (`Dozing`) | **1.8% / hour** | Low-duty BLE scanner & advertiser |
-| **Active Mesh Voice Receive** | Samsung Galaxy J8 | Screen Off (`PARTIAL_WAKE_LOCK`) | **3.2% / hour** | Real-time PCM audio playback active |
-| **Emergency SOS Active Beacon** | Samsung Galaxy J8 | Screen On | **4.1% / hour** | 4-second distress pulse & UI animations |
+| **Background BLE Standby** | Representative Android device | Screen Off (`Dozing`) | Measure during release testing | Low-duty BLE scanner & advertiser |
+| **Active Mesh Voice Receive** | Representative Android device | Screen Off (`PARTIAL_WAKE_LOCK`) | Measure during release testing | Real-time audio playback active |
+| **Emergency SOS Active Beacon** | Representative Android device | Screen On | Measure during release testing | Distress beacon and UI active |
 
 ---
 

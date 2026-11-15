@@ -21,13 +21,16 @@ sealed class GroupMessage {
         val groupName: String,
         val coordinatorId: String,
         val epoch: Int,
-        val secretHex: String
+        val secretHex: String,
+        val voiceKeyHex: String? = null,
+        val voiceEpoch: Long = 0
     ) : GroupMessage()
 
     /** Joiner -> coordinator: requesting membership. */
     data class JoinRequest(
         val memberId: String,
-        val displayName: String
+        val displayName: String,
+        val relayOnly: Boolean = false
     ) : GroupMessage()
 
     /**
@@ -75,8 +78,8 @@ sealed class GroupMessage {
     ) : GroupMessage()
 
     fun encode(): ByteArray = when (this) {
-        is Welcome -> join(T_WELCOME, groupId, groupName, coordinatorId, epoch.toString(), secretHex)
-        is JoinRequest -> join(T_JOIN, memberId, displayName)
+        is Welcome -> join(T_WELCOME, groupId, groupName, coordinatorId, epoch.toString(), secretHex, voiceKeyHex.orEmpty(), voiceEpoch.toString())
+        is JoinRequest -> join(T_JOIN, memberId, displayName, relayOnly.toString())
         is Roster -> join(
             T_ROSTER,
             groupId,
@@ -124,11 +127,14 @@ sealed class GroupMessage {
                         groupName = parts[2],
                         coordinatorId = parts[3],
                         epoch = parts[4].toInt(),
-                        secretHex = parts[5]
+                        secretHex = parts[5],
+                        voiceKeyHex = parts.getOrNull(6)?.takeIf { it.isNotBlank() },
+                        voiceEpoch = parts.getOrNull(7)?.toLongOrNull() ?: 0
                     )
                     T_JOIN -> if (parts.size < 3) null else JoinRequest(
                         memberId = parts[1],
-                        displayName = parts[2]
+                        displayName = parts[2],
+                        relayOnly = parts.getOrNull(3) == "true"
                     )
                     T_ROSTER -> if (parts.size < 4) null else Roster(
                         groupId = parts[1],
@@ -165,11 +171,12 @@ sealed class GroupMessage {
 data class RosterEntry(
     val memberId: String,
     val displayName: String,
-    val role: GroupRole
+    val role: GroupRole,
+    val relayOnly: Boolean = false
 ) {
     fun encode(separator: String = GroupMessage.entryFieldSeparator()): String {
         val roleChar = if (role == GroupRole.COORDINATOR) "C" else "M"
-        return listOf(memberId, displayName, roleChar).joinToString(separator)
+        return listOf(memberId, displayName, roleChar, relayOnly.toString()).joinToString(separator)
     }
 
     companion object {
@@ -182,7 +189,7 @@ data class RosterEntry(
                 else -> return null
             }
             if (f[0].isBlank()) return null
-            return RosterEntry(f[0], f[1], role)
+            return RosterEntry(f[0], f[1], role, f.getOrNull(3) == "true")
         }
     }
 }

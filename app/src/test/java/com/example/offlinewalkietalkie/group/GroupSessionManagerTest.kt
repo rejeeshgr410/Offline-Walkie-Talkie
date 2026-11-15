@@ -9,6 +9,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GroupSessionManagerTest {
+    @Test fun `relay admission receives membership material but no voice key`() = runTest {
+        val sim = formGroup(2)
+        sim.addNode("CCCC")
+        val relay = sim.nodeOf("CCCC")
+        relay.manager.setRelayOnlyJoining(true)
+        sim.discoverAll()
+        val host = sim.nodeOf("AAAA")
+        relay.manager.joinGroup(host.advert!!, host.endpointId)
+        sim.settle(rounds = 10)
+        assertTrue(relay.manager.holdsGroupSecret)
+        assertNull(relay.manager.channelEncryptionKey())
+        assertTrue(host.manager.state.value.member("CCCC")!!.relayOnly)
+        assertTrue(host.manager.channelEncryptionKey()!!.contentEquals(sim.nodeOf("BBBB").manager.channelEncryptionKey()!!))
+        val saved = relay.manager.recoveryCheckpoint()!!
+        assertTrue(relay.manager.restoreCheckpoint(saved))
+        assertNull(relay.manager.channelEncryptionKey())
+    }
+    @Test fun `recovery restores admission but never old endpoint trust`() = runTest {
+        val sim = formGroup(3)
+        val manager = sim.nodeOf("BBBB").manager
+        val checkpoint = manager.recoveryCheckpoint()!!
+        val key = manager.channelEncryptionKey()!!
+        assertTrue(manager.restoreCheckpoint(checkpoint))
+        assertTrue(manager.holdsGroupSecret)
+        assertEquals(0, manager.state.value.connected.size)
+        assertTrue(manager.state.value.others.all { it.endpointId == null && !it.humanVerified })
+        assertTrue(key.contentEquals(manager.channelEncryptionKey()!!))
+        assertFalse(manager.restoreCheckpoint("{}"))
+    }
 
     /** Builds a group of [size] nodes, first one hosting, and settles the mesh. */
     private suspend fun formGroup(size: Int, name: String = "Field Ops"): MeshSimulator {

@@ -19,9 +19,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.offlinewalkietalkie.R
 import com.example.offlinewalkietalkie.history.VoiceMessage
 import com.example.offlinewalkietalkie.theme.*
 import com.example.offlinewalkietalkie.ui.components.GlassSurface
@@ -42,16 +44,16 @@ fun VoiceHistoryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Voice History", style = AppleTitle2) },
+                title = { Text(stringResource(R.string.voice_history), style = AppleTitle2) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                     }
                 },
                 actions = {
                     if (history.isNotEmpty()) {
                         IconButton(onClick = { viewModel.voiceHistoryManager.clearHistory() }) {
-                            Icon(Icons.Default.DeleteOutline, contentDescription = "Clear History", tint = AppleTextSecondary)
+                            Icon(Icons.Default.DeleteOutline, contentDescription = stringResource(R.string.clear_history), tint = AppleTextSecondary)
                         }
                     }
                 },
@@ -101,8 +103,8 @@ fun VoiceHistoryScreen(
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
-                            Text("Latest Transmission", style = AppleHeadline, color = AppleTextPrimary)
-                            Text("1-tap replay of latest audio", style = AppleFootnote, color = AppleTextSecondary)
+                            Text(stringResource(R.string.latest_transmission), style = AppleHeadline, color = AppleTextPrimary)
+                            Text(stringResource(R.string.latest_transmission_desc), style = AppleFootnote, color = AppleTextSecondary)
                         }
                     }
                     Button(
@@ -115,13 +117,13 @@ fun VoiceHistoryScreen(
                         enabled = history.isNotEmpty(),
                         modifier = Modifier.height(38.dp)
                     ) {
-                        Text("Replay", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(stringResource(R.string.replay), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
                 }
             }
 
             Text(
-                text = "RECORDED TRANSMISSIONS (${history.size})",
+                text = stringResource(R.string.recorded_transmissions_count, history.size),
                 style = AppleCaption2,
                 modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 8.dp)
             )
@@ -150,13 +152,13 @@ fun VoiceHistoryScreen(
                         }
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "No Recorded Audio",
+                            text = stringResource(R.string.no_recorded_audio),
                             style = AppleHeadline,
                             color = AppleTextSecondary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Incoming transmissions are auto-saved here for offline replay.",
+                            text = stringResource(R.string.history_empty_desc),
                             style = AppleFootnote,
                             color = AppleTextTertiary
                         )
@@ -224,7 +226,7 @@ fun VoiceMessageRow(
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Stop" else "Play",
+                    contentDescription = if (isPlaying) stringResource(R.string.stop) else stringResource(R.string.play),
                     tint = if (isPlaying) Color.White else Color(0xFFE60023),
                     modifier = Modifier.size(22.dp)
                 )
@@ -239,7 +241,7 @@ fun VoiceMessageRow(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = if (message.isIncoming) message.senderName else "You (Outgoing)",
+                        text = if (message.isIncoming) message.senderName else stringResource(R.string.you_outgoing),
                         style = AppleHeadline,
                         fontSize = 14.sp,
                         color = if (message.isIncoming) AppleTextPrimary else AppleSystemTeal
@@ -265,7 +267,7 @@ fun VoiceMessageRow(
                         fontSize = 12.sp
                     )
                     Text(
-                        text = if (message.isIncoming) "Incoming" else "Outgoing",
+                        text = if (message.isIncoming) stringResource(R.string.incoming) else stringResource(R.string.outgoing),
                         style = AppleCaption1,
                         color = AppleTextTertiary
                     )

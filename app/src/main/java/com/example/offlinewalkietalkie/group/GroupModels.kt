@@ -70,7 +70,8 @@ data class GroupMember(
     val humanVerified: Boolean = false,
     val failureReason: String? = null,
     val attempts: Int = 0,
-    val lastSeenEpochMs: Long = 0L
+    val lastSeenEpochMs: Long = 0L,
+    val relayOnly: Boolean = false
 )
 
 /**

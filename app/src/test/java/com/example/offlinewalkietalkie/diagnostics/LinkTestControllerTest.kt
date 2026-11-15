@@ -44,6 +44,23 @@ class LinkTestControllerTest {
         assertTrue("Measured RTT should be >= 40 ms", telemetry.rttMs >= 40L)
         assertEquals(0.0, telemetry.packetLossPercent, 0.01)
         assertEquals(5, telemetry.qualityBars)
+        assertEquals(1, telemetry.packetsSent)
+        assertEquals(1, telemetry.packetsReceived)
+        assertEquals(0, telemetry.packetsLost)
+    }
+
+    @Test
+    fun testOutstandingProbeIsReportedAsPendingLoss() = runTest {
+        val testController = LinkTestController(sendPing = { _, _ -> }, scope = this)
+
+        testController.performLinkTest("peer_1")
+        runCurrent()
+
+        val telemetry = testController.telemetry.value
+        assertEquals(1, telemetry.packetsSent)
+        assertEquals(0, telemetry.packetsReceived)
+        assertEquals(1, telemetry.packetsLost)
+        assertEquals(100.0, telemetry.packetLossPercent, 0.01)
     }
 
     @Test

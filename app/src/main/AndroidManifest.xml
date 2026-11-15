@@ -4,6 +4,7 @@
 
     <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Legacy Bluetooth, superseded by the runtime permissions below on API 31+ -->
@@ -90,11 +91,6 @@
                 <action android:name="com.example.offlinewalkietalkie.action.CANCEL_SOS" />
             </intent-filter>
         </receiver>
-
-        <service
-            android:name=".WalkieTalkieService"
-            android:foregroundServiceType="microphone|connectedDevice"
-            android:exported="false" />
 
         <service
             android:name=".service.WalkieTalkieForegroundService"

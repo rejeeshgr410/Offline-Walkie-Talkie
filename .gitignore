@@ -26,3 +26,8 @@ keystore.properties
 /app/build
 /.idea
 /scratch
+
+# Local investigation inputs and device evidence
+/.codex-remote-attachments/
+/.test-artifacts/
+/reference-apks/

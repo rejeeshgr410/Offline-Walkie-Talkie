@@ -28,9 +28,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.offlinewalkietalkie.R
 import com.example.offlinewalkietalkie.data.OfflineMapArea
 import com.example.offlinewalkietalkie.data.mbtiles.MbTilesPackage
 import com.example.offlinewalkietalkie.theme.*
@@ -85,14 +87,14 @@ fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = AppleTextPrimary) }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back), tint = AppleTextPrimary) }
                     Column {
-                        Text("Discover Map", style = AppleTitle2)
-                        Text("Offline GPS & Mesh Location Telemetry", style = AppleFootnote, color = AppleTextSecondary)
+                        Text(stringResource(R.string.discover_map), style = AppleTitle2)
+                        Text(stringResource(R.string.discover_map_subtitle), style = AppleFootnote, color = AppleTextSecondary)
                     }
                 }
                 IconButton(onClick = { viewModel.refreshLocation() }) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = "Refresh GPS", tint = AppleSystemBlue)
+                    Icon(Icons.Default.PlayArrow, contentDescription = stringResource(R.string.refresh_gps), tint = AppleSystemBlue)
                 }
             }
 
@@ -106,7 +108,7 @@ fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("MY CURRENT GPS FIX", style = AppleCaption2)
+                        Text(stringResource(R.string.current_gps_fix), style = AppleCaption2)
                         val hasLoc = currentLocation != null
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             Box(
@@ -116,7 +118,7 @@ fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     .background(if (hasLoc) AppleSystemGreen else AppleSystemOrange)
                             )
                             Text(
-                                text = if (hasLoc) "Locked • ${currentLocation?.provider?.uppercase() ?: "GPS"}" else "Acquiring Satellites…",
+                                text = if (hasLoc) stringResource(R.string.locked_provider, currentLocation?.provider?.uppercase() ?: "GPS") else stringResource(R.string.acquiring_satellites),
                                 style = AppleCaption1,
                                 color = if (hasLoc) AppleSystemGreen else AppleSystemOrange,
                                 fontWeight = FontWeight.SemiBold
@@ -129,7 +131,8 @@ fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                         val latStr = "%.6f° %s".format(kotlin.math.abs(loc.latitude), if (loc.latitude >= 0) "N" else "S")
                         val lonStr = "%.6f° %s".format(kotlin.math.abs(loc.longitude), if (loc.longitude >= 0) "E" else "W")
                         Text(
-                            text = "$latStr, $lonStr",
+                            // Keep coordinate order stable inside an RTL interface.
+                            text = "\u2066$latStr, $lonStr\u2069",
                             style = AppleTitle2.copy(fontSize = 18.sp),
                             color = AppleTextPrimary
                         )
@@ -138,21 +141,21 @@ fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             if (loc.hasAccuracy()) {
-                                Text("Accuracy: ±${"%.1f".format(loc.accuracy)}m", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
+                                Text(stringResource(R.string.gps_accuracy, "%.1f".format(loc.accuracy)), style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
                             }
                             if (loc.hasAltitude()) {
-                                Text("Alt: ${loc.altitude.toInt()}m", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
+                                Text(stringResource(R.string.gps_altitude, loc.altitude.toInt()), style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
                             }
-                            Text("Heading: ${heading.toInt()}°", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
+                            Text(stringResource(R.string.gps_heading, heading.toInt()), style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
                         }
                     } else {
                         Text(
-                            text = "Waiting for GPS satellite fix…",
+                            text = stringResource(R.string.waiting_gps),
                             style = AppleHeadline,
                             color = AppleTextSecondary
                         )
                         Text(
-                            text = "Native satellite tracking active. Works 100% offline with zero internet.",
+                            text = stringResource(R.string.gps_offline_note),
                             style = AppleCaption1,
                             color = AppleTextTertiary
                         )
@@ -231,7 +234,7 @@ fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
             }
 
             Text(
-                text = "Concentric radar ranges: 250m • 500m • 1km • Blue is you, Cyan is active mesh peers",
+                text = stringResource(R.string.map_legend),
                 style = AppleCaption1,
                 color = AppleTextTertiary,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
@@ -244,12 +247,12 @@ fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = "No peers sharing location yet",
+                            text = stringResource(R.string.no_location_peers),
                             style = AppleHeadline,
                             color = AppleTextSecondary
                         )
                         Text(
-                            text = "When connected via Bluetooth walkie-talkie,\npeers automatically appear on this tactical map.",
+                            text = stringResource(R.string.location_peer_note),
                             style = AppleFootnote,
                             color = AppleTextTertiary,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -266,7 +269,7 @@ fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                 myLoc.latitude, myLoc.longitude,
                                 peer.latitude, peer.longitude
                             )
-                            if (d >= 1000.0) "%.1f km away".format(d / 1000.0) else "${d.toInt()} m away"
+                            if (d >= 1000.0) stringResource(R.string.distance_km_away, "%.1f".format(d / 1000.0)) else stringResource(R.string.distance_m_away, d.toInt())
                         } else null
 
                         GlassSurface(cornerRadius = 16.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
@@ -286,7 +289,7 @@ fun DiscoverMapScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     }
                                 }
                                 Text(
-                                    text = if (age < 120_000L) "Live • ${age / 1000}s" else "Updated ${age / 60_000}m ago",
+                                    text = if (age < 120_000L) stringResource(R.string.location_live, age / 1000) else stringResource(R.string.location_updated, age / 60_000),
                                     style = AppleCaption1,
                                     color = if (age < 120_000L) AppleSystemGreen else AppleSystemOrange,
                                     fontWeight = FontWeight.SemiBold
@@ -342,10 +345,10 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
     Box(Modifier.fillMaxSize().background(AppleBackground).safeDrawingPadding().imePadding().padding(16.dp)) {
         Column(Modifier.fillMaxSize()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = AppleTextPrimary) }
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back), tint = AppleTextPrimary) }
                 Column {
-                    Text("Offline Vector Maps", style = AppleTitle2)
-                    Text("Pre-bundled OSM road networks & SQLite MBTiles", style = AppleFootnote, color = AppleTextSecondary)
+                    Text(stringResource(R.string.offline_vector_maps), style = AppleTitle2)
+                    Text(stringResource(R.string.offline_vector_maps_subtitle), style = AppleFootnote, color = AppleTextSecondary)
                 }
             }
 
@@ -370,7 +373,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        "Road Vectors (OSM)",
+                        stringResource(R.string.road_vectors),
                         style = AppleSubheadline,
                         color = if (selectedTab == 0) AppleTextPrimary else AppleTextSecondary,
                         fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal
@@ -386,7 +389,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        "MBTiles Packages",
+                        stringResource(R.string.mbtiles_packages),
                         style = AppleSubheadline,
                         color = if (selectedTab == 1) AppleTextPrimary else AppleTextSecondary,
                         fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal
@@ -397,8 +400,26 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
 
             if (selectedTab == 0) {
+                var catalogQuery by remember { mutableStateOf("") }
                 // TAB 0: ROAD VECTORS (OSM OVERPASS)
                 LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 10.dp)) {
+                    item {
+                        OutlinedTextField(value = catalogQuery, onValueChange = { catalogQuery = it },
+                            label = { Text("Search area catalogue") }, modifier = Modifier.fillMaxWidth())
+                        if (catalogQuery.isNotBlank()) {
+                            com.example.offlinewalkietalkie.data.MapAreaCatalog.search(catalogQuery).forEach { area ->
+                                TextButton(onClick = {
+                                    latitude = area.latitude.toString()
+                                    longitude = area.longitude.toString()
+                                    name = area.name
+                                    catalogQuery = ""
+                                }) { Text(area.name) }
+                            }
+                        }
+                        TextButton(onClick = { viewModel.resumeOfflineMapDownload() }) {
+                            Text("Resume last area download")
+                        }
+                    }
                     item {
                         val usedKb = (storageUsed / 1024).coerceAtLeast(1)
                         val quotaMb = (storageQuota / (1024 * 1024)).toInt()
@@ -410,13 +431,13 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("STORAGE QUOTA & CACHE", style = AppleCaption2)
+                                    Text(stringResource(R.string.storage_quota_cache), style = AppleCaption2)
                                     if (areas.isNotEmpty()) {
                                         TextButton(
                                             onClick = { viewModel.clearAllOfflineMaps() },
                                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                         ) {
-                                            Text("Purge All Packs", color = AppleSystemRed, style = AppleCaption1, fontWeight = FontWeight.SemiBold)
+                                            Text(stringResource(R.string.purge_all_packs), color = AppleSystemRed, style = AppleCaption1, fontWeight = FontWeight.SemiBold)
                                         }
                                     }
                                 }
@@ -430,8 +451,8 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("$usedKb KB used", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
-                                    Text("$quotaMb MB storage limit", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextTertiary))
+                                    Text(stringResource(R.string.kb_used, usedKb), style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
+                                    Text(stringResource(R.string.mb_storage_limit, quotaMb), style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextTertiary))
                                 }
                             }
                         }
@@ -440,8 +461,8 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                         GlassSurface(cornerRadius = 20.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(14.dp)) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                    Text("${selectedArea!!.name} • Vector Road Geometry", style = AppleHeadline)
-                                    TextButton(onClick = viewModel::closeOfflineMap) { Text("Close", color = AppleSystemBlue, fontWeight = FontWeight.Bold) }
+                                    Text(stringResource(R.string.vector_road_geometry, selectedArea!!.name), style = AppleHeadline)
+                                    TextButton(onClick = viewModel::closeOfflineMap) { Text(stringResource(R.string.close), color = AppleSystemBlue, fontWeight = FontWeight.Bold) }
                                 }
                                 Spacer(Modifier.height(8.dp))
                                 Canvas(Modifier.fillMaxWidth().height(260.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF0C1018))) {
@@ -462,14 +483,14 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                         }
                                     }
                                 }
-                                Text("Rendered entirely offline with zero network connectivity • © OpenStreetMap contributors", style = AppleCaption1, color = AppleTextTertiary, modifier = Modifier.padding(top = 8.dp))
+                                Text(stringResource(R.string.offline_rendering_note), style = AppleCaption1, color = AppleTextTertiary, modifier = Modifier.padding(top = 8.dp))
                             }
                         }
                     }
                     item {
                         GlassSurface(cornerRadius = 20.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Text("DOWNLOAD VECTOR AREA", style = AppleCaption2)
+                                Text(stringResource(R.string.download_vector_area), style = AppleCaption2)
                                 val fieldColors = OutlinedTextFieldDefaults.colors(
                                     focusedTextColor = AppleTextPrimary,
                                     unfocusedTextColor = AppleTextPrimary,
@@ -486,7 +507,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                 OutlinedTextField(
                                     value = name,
                                     onValueChange = { name = it },
-                                    label = { Text("Area Name") },
+                                    label = { Text(stringResource(R.string.area_name)) },
                                     colors = fieldColors,
                                     shape = fieldShape,
                                     singleLine = true,
@@ -496,7 +517,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     OutlinedTextField(
                                         value = latitude,
                                         onValueChange = { latitude = it },
-                                        label = { Text("Latitude") },
+                                        label = { Text(stringResource(R.string.latitude)) },
                                         colors = fieldColors,
                                         shape = fieldShape,
                                         modifier = Modifier.weight(1f),
@@ -505,7 +526,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     OutlinedTextField(
                                         value = longitude,
                                         onValueChange = { longitude = it },
-                                        label = { Text("Longitude") },
+                                        label = { Text(stringResource(R.string.longitude)) },
                                         colors = fieldColors,
                                         shape = fieldShape,
                                         modifier = Modifier.weight(1f),
@@ -515,21 +536,21 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                 OutlinedTextField(
                                     value = radius,
                                     onValueChange = { radius = it },
-                                    label = { Text("Radius (0.2 - 2.0 km)") },
+                                    label = { Text(stringResource(R.string.radius_km)) },
                                     colors = fieldColors,
                                     shape = fieldShape,
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth()
                                 )
-                                Text("Downloads vector geometries from OpenStreetMap. Public Overpass limits apply.", style = AppleFootnote, color = AppleTextTertiary)
+                                Text(stringResource(R.string.vector_download_note), style = AppleFootnote, color = AppleTextTertiary)
                                 if (progress != null) {
                                     LinearProgressIndicator(Modifier.fillMaxWidth(), color = AppleSystemBlue)
-                                    Text("Downloading • ${(progress!! / 1024).coerceAtLeast(1)} KB received", style = AppleMonospacedDigits, color = AppleTextPrimary)
+                                    Text(stringResource(R.string.downloading_kb, (progress!! / 1024).coerceAtLeast(1)), style = AppleMonospacedDigits, color = AppleTextPrimary)
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         OutlinedButton(onClick = { viewModel.cancelOfflineMapDownload(); isPaused = true }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(10.dp)) {
-                                            Icon(Icons.Default.Pause, null); Spacer(Modifier.width(6.dp)); Text("Pause")
+                                            Icon(Icons.Default.Pause, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.pause))
                                         }
-                                        OutlinedButton(onClick = { viewModel.cancelOfflineMapDownload(); isPaused = false }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(10.dp)) { Text("Cancel") }
+                                        OutlinedButton(onClick = { viewModel.cancelOfflineMapDownload(); isPaused = false }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(10.dp)) { Text(stringResource(R.string.cancel)) }
                                     }
                                 } else {
                                     Button(
@@ -546,11 +567,11 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                         modifier = Modifier.fillMaxWidth().height(46.dp)
                                     ) {
                                         Icon(if (isPaused) Icons.Default.PlayArrow else Icons.Default.Download, null)
-                                        Spacer(Modifier.width(8.dp)); Text(if (isPaused) "Resume Download" else "Download Area Pack", fontWeight = FontWeight.Bold)
+                                        Spacer(Modifier.width(8.dp)); Text(if (isPaused) stringResource(R.string.resume_download) else stringResource(R.string.download_area_pack), fontWeight = FontWeight.Bold)
                                     }
                                 }
-                                if (!validCoordinates) Text("Enter latitude (-85 to 85) and longitude (-180 to 180).", color = AppleSystemRed, style = AppleFootnote)
-                                if (!validRadius) Text("Choose a radius between 0.2 and 2.0 km.", color = AppleSystemRed, style = AppleFootnote)
+                                if (!validCoordinates) Text(stringResource(R.string.invalid_coordinates), color = AppleSystemRed, style = AppleFootnote)
+                                if (!validRadius) Text(stringResource(R.string.invalid_radius), color = AppleSystemRed, style = AppleFootnote)
                                 if (error != null) Text(error!!, color = AppleSystemRed, style = AppleFootnote)
                             }
                         }
@@ -561,9 +582,9 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("SAVED VECTOR MAP PACKS (${areas.size})", style = AppleCaption2)
+                            Text(stringResource(R.string.saved_vector_packs, areas.size), style = AppleCaption2)
                             TextButton(onClick = { viewModel.restoreBundledMapPacks() }) {
-                                Text("Unpack Starter Packs", style = AppleSubheadline, color = AppleSystemBlue, fontWeight = FontWeight.SemiBold)
+                                Text(stringResource(R.string.unpack_starter_packs), style = AppleSubheadline, color = AppleSystemBlue, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -572,7 +593,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                             Row(Modifier.padding(14.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
                                     Text(area.name, style = AppleHeadline)
-                                    Text("${area.roadCount} roads • ${area.radiusKm} km • ${(area.file.length() / 1024).coerceAtLeast(1)} KB", style = AppleFootnote, color = AppleTextSecondary)
+                                    Text(stringResource(R.string.map_pack_summary, area.roadCount, area.radiusKm.toString(), (area.file.length() / 1024).coerceAtLeast(1)), style = AppleFootnote, color = AppleTextSecondary)
                                 }
                                 Button(
                                     onClick = { viewModel.openOfflineMap(area) },
@@ -580,12 +601,12 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.height(34.dp),
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
-                                ) { Text("Open", fontWeight = FontWeight.Bold, fontSize = 12.sp) }
-                                IconButton(onClick = { viewModel.deleteOfflineMap(area) }) { Icon(Icons.Default.DeleteOutline, "Delete ${area.name}", tint = AppleTextTertiary) }
+                                ) { Text(stringResource(R.string.open), fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+                                IconButton(onClick = { viewModel.deleteOfflineMap(area) }) { Icon(Icons.Default.DeleteOutline, stringResource(R.string.delete_named, area.name), tint = AppleTextTertiary) }
                             }
                         }
                     }
-                    if (areas.isEmpty()) item { Text("No saved map areas yet.", style = AppleFootnote, color = AppleTextTertiary, modifier = Modifier.padding(8.dp)) }
+                    if (areas.isEmpty()) item { Text(stringResource(R.string.no_saved_map_areas), style = AppleFootnote, color = AppleTextTertiary, modifier = Modifier.padding(8.dp)) }
                 }
             } else {
                 // TAB 1: MBTILES TILE PACKS (SQLITE ARCHIVES)
@@ -601,13 +622,13 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("MBTILES STORAGE & QUOTA", style = AppleCaption2)
+                                    Text(stringResource(R.string.mbtiles_storage_quota), style = AppleCaption2)
                                     if (mbTilesPackages.isNotEmpty()) {
                                         TextButton(
                                             onClick = { viewModel.clearAllMbTiles() },
                                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                         ) {
-                                            Text("Purge All Packs", color = AppleSystemRed, style = AppleCaption1, fontWeight = FontWeight.SemiBold)
+                                            Text(stringResource(R.string.purge_all_packs), color = AppleSystemRed, style = AppleCaption1, fontWeight = FontWeight.SemiBold)
                                         }
                                     }
                                 }
@@ -621,8 +642,8 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("$usedMb MB used", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
-                                    Text("$quotaMb MB max quota", style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextTertiary))
+                                    Text(stringResource(R.string.mb_used, usedMb), style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextSecondary))
+                                    Text(stringResource(R.string.mb_max_quota, quotaMb), style = AppleMonospacedDigits.copy(fontSize = 11.sp, color = AppleTextTertiary))
                                 }
                             }
                         }
@@ -636,10 +657,10 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                         Column {
                                             Text(selectedMbTiles!!.metadata.name, style = AppleHeadline)
-                                            Text("${selectedMbTiles!!.metadata.format.uppercase()} Format • ${selectedMbTiles!!.metadata.tileCount} Tiles", style = AppleFootnote, color = AppleTextSecondary)
+                                            Text(stringResource(R.string.mbtiles_format, selectedMbTiles!!.metadata.format.uppercase(), selectedMbTiles!!.metadata.tileCount), style = AppleFootnote, color = AppleTextSecondary)
                                         }
                                         TextButton(onClick = { viewModel.selectMbTiles(null) }) {
-                                            Text("Close", color = AppleSystemBlue, fontWeight = FontWeight.Bold)
+                                            Text(stringResource(R.string.close), color = AppleSystemBlue, fontWeight = FontWeight.Bold)
                                         }
                                     }
 
@@ -655,7 +676,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                         ) {
                                             Image(
                                                 bitmap = tilePreview!!.bitmap!!.asImageBitmap(),
-                                                contentDescription = "MBTiles Tile Preview",
+                                                contentDescription = stringResource(R.string.mbtiles_preview),
                                                 modifier = Modifier.fillMaxSize()
                                             )
                                             // Tactical coordinate HUD
@@ -667,7 +688,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                                             ) {
                                                 Text(
-                                                    "Tile (z=${tilePreview!!.zoom}, x=${tilePreview!!.column}, y=${tilePreview!!.row})",
+                                                    stringResource(R.string.tile_coordinates, tilePreview!!.zoom, tilePreview!!.column, tilePreview!!.row),
                                                     style = AppleMonospacedDigits.copy(fontSize = 10.sp, color = AppleSystemTeal)
                                                 )
                                             }
@@ -682,7 +703,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Text(
-                                                "Vector MBTiles Package (PBF Protobuf Layers)\nReady for MapLibre/Offline Vector Rendering",
+                                                stringResource(R.string.vector_mbtiles_ready),
                                                 style = AppleFootnote,
                                                 color = AppleSystemTeal,
                                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -692,7 +713,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
 
                                     // Bounds & Attribution
                                     selectedMbTiles!!.metadata.bounds?.let { b ->
-                                        Text("Geographic Bounds: $b", style = AppleCaption1, color = AppleTextTertiary)
+                                        Text(stringResource(R.string.geographic_bounds, b), style = AppleCaption1, color = AppleTextTertiary)
                                     }
                                     selectedMbTiles!!.metadata.attribution?.let { a ->
                                         Text(a, style = AppleCaption1, color = AppleTextTertiary)
@@ -706,9 +727,9 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                     item {
                         GlassSurface(cornerRadius = 20.dp, isOutdoorMode = false, modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Text("IMPORT & UNPACK PACKS", style = AppleCaption2)
+                                Text(stringResource(R.string.import_unpack_packs), style = AppleCaption2)
                                 Text(
-                                    "Import standard .mbtiles packages (Mapbox / OpenMapTiles SQLite) from device storage for complete offline topological and regional basemaps.",
+                                    stringResource(R.string.mbtiles_import_description),
                                     style = AppleFootnote,
                                     color = AppleTextSecondary
                                 )
@@ -721,7 +742,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     ) {
                                         Icon(Icons.Default.FileUpload, null, modifier = Modifier.size(18.dp))
                                         Spacer(Modifier.width(6.dp))
-                                        Text("Import .mbtiles", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text(stringResource(R.string.import_mbtiles), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                     }
 
                                     OutlinedButton(
@@ -731,7 +752,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     ) {
                                         Icon(Icons.Default.Layers, null, modifier = Modifier.size(18.dp))
                                         Spacer(Modifier.width(6.dp))
-                                        Text("Unpack Starter", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                        Text(stringResource(R.string.unpack_starter), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                     }
                                 }
                             }
@@ -745,7 +766,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("INSTALLED MBTILES PACKS (${mbTilesPackages.size})", style = AppleCaption2)
+                            Text(stringResource(R.string.installed_mbtiles_packs, mbTilesPackages.size), style = AppleCaption2)
                         }
                     }
 
@@ -771,10 +792,10 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                                     modifier = Modifier.height(34.dp),
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
                                 ) {
-                                    Text("Inspect", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Text(stringResource(R.string.inspect), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                                 IconButton(onClick = { viewModel.deleteMbTiles(pack) }) {
-                                    Icon(Icons.Default.DeleteOutline, "Delete ${pack.metadata.name}", tint = AppleTextTertiary)
+                                    Icon(Icons.Default.DeleteOutline, stringResource(R.string.delete_named, pack.metadata.name), tint = AppleTextTertiary)
                                 }
                             }
                         }
@@ -783,7 +804,7 @@ fun OfflineMapsScreen(viewModel: WalkieTalkieViewModel, onBack: () -> Unit) {
                     if (mbTilesPackages.isEmpty()) {
                         item {
                             Text(
-                                "No MBTiles packages installed yet. Tap 'Unpack Starter' or 'Import .mbtiles' to load an offline regional basemap.",
+                                stringResource(R.string.no_mbtiles_packages),
                                 style = AppleFootnote,
                                 color = AppleTextTertiary,
                                 modifier = Modifier.padding(8.dp)

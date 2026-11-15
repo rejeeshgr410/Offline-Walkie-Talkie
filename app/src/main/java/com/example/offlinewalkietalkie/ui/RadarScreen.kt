@@ -24,9 +24,11 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.offlinewalkietalkie.R
 import com.example.offlinewalkietalkie.protocol.PeerLocation
 import com.example.offlinewalkietalkie.radar.RadarMath
 import com.example.offlinewalkietalkie.theme.*
@@ -92,10 +94,10 @@ fun RadarScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Directional Radar", style = AppleTitle2) },
+                title = { Text(stringResource(R.string.directional_radar), style = AppleTitle2) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -187,7 +189,7 @@ fun RadarScreen(
                         ) {
                             Icon(Icons.Default.Navigation, contentDescription = null, tint = AppleSystemBlue, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Open in Maps Navigation", style = AppleHeadline, fontSize = 13.sp)
+                            Text(stringResource(R.string.open_maps_navigation), style = AppleHeadline, fontSize = 13.sp)
                         }
                     }
                 }
@@ -300,7 +302,7 @@ fun RadarScreen(
 
             // Peer selector chips
             Text(
-                text = "TRACKED PEERS",
+                text = stringResource(R.string.tracked_peers),
                 style = AppleCaption2,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -310,7 +312,7 @@ fun RadarScreen(
             val allTargets = peerLocations.values.toList()
             if (allTargets.isEmpty()) {
                 Text(
-                    text = "No peers broadcasting GPS yet. Nearby devices appear automatically.",
+                    text = stringResource(R.string.no_gps_peers),
                     style = AppleFootnote,
                     color = AppleTextTertiary,
                     modifier = Modifier.padding(vertical = 4.dp)

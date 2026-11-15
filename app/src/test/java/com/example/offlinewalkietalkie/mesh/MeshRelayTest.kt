@@ -8,6 +8,22 @@ import org.junit.Before
 import org.junit.Test
 
 class MeshRelayTest {
+    @Test fun tamperedHopLimitFailsAuthentication() {
+        setUp()
+        val bytes = nodeA.originatePacket(InnerPacket(type = FrameType.VOICE, payload = byteArrayOf(42)), channelVoiceKey).getValue("ep_B")
+        val outer = com.example.offlinewalkietalkie.protocol.OuterPacket.decode(bytes)!!
+        val changed = outer.copy(hopLimit = 5).encode()
+        assertEquals(MeshOutcome.DroppedAuthFailed, nodeB.processPacket("ep_A", changed))
+    }
+
+    @Test fun originDropsLoopedPacketAfterDifferentRelayRewrapsIt() {
+        setUp()
+        val wire = nodeA.originatePacket(InnerPacket(type = FrameType.VOICE, payload = byteArrayOf(42)), channelVoiceKey).getValue("ep_B")
+        val codec = com.example.offlinewalkietalkie.protocol.TwoLayerCodec()
+        val inner = codec.decodeOuter(wire, hopKeyAB)!!.innerCiphertext
+        val echoed = codec.rewrapOuter(inner, hopKeyAB, 222L, 1)
+        assertEquals(MeshOutcome.DroppedDuplicate, nodeA.processPacket("ep_B", echoed))
+    }
 
     private lateinit var cryptoEngine: TinkCryptoEngine
 
@@ -166,5 +182,39 @@ class MeshRelayTest {
 
         // No downstream route available
         assertEquals(MeshOutcome.DroppedNoRoute, outcome)
+    }
+
+    @Test
+    fun `authorized member can deliver and continue a three hop relay chain`() {
+        val nodeD = MeshRelayRouter(localNodeId = 444L)
+        val hopKeyCD = cryptoEngine.deriveHopKey(ByteArray(32) { 0xDD.toByte() })
+
+        // C is both an authorized listener and a bridge to D.
+        nodeC.registerNeighborLink("ep_D", 444L, hopKeyCD)
+        nodeD.registerNeighborLink("ep_C", 333L, hopKeyCD)
+        nodeD.channelVoiceKey = channelVoiceKey
+
+        val packet = InnerPacket(
+            type = FrameType.VOICE,
+            flags = InnerPacket.FLAG_ENCRYPTED,
+            hopLimit = 3,
+            channelId = 777L,
+            memberId = 111L,
+            sequence = 99,
+            payload = "three hop voice".toByteArray()
+        )
+
+        val atB = nodeB.processPacket("ep_A", nodeA.originatePacket(packet, channelVoiceKey).getValue("ep_B"))
+            as MeshOutcome.Forwarded
+        val atC = nodeC.processPacket("ep_B", atB.rewrappedPackets.getValue("ep_C"))
+
+        assertTrue("C must expose both local delivery and the forward bytes", atC is MeshOutcome.DeliveredAndForwarded)
+        val deliveredAndForwarded = atC as MeshOutcome.DeliveredAndForwarded
+        assertEquals(1.toByte(), deliveredAndForwarded.remainingHopLimit)
+        assertArrayEquals(packet.payload, deliveredAndForwarded.innerPacket.payload)
+
+        val atD = nodeD.processPacket("ep_C", deliveredAndForwarded.rewrappedPackets.getValue("ep_D"))
+        assertTrue(atD is MeshOutcome.DeliveredLocally)
+        assertArrayEquals(packet.payload, (atD as MeshOutcome.DeliveredLocally).innerPacket.payload)
     }
 }

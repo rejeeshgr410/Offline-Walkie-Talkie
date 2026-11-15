@@ -84,7 +84,7 @@ class VoiceHistoryManager(private val context: Context) {
 
             // Trim to max 50
             while (updated.size > MAX_SAVED_MESSAGES) {
-                val removed = updated.removeLast()
+                val removed = updated.removeAt(updated.lastIndex)
                 File(removed.filePath).delete()
             }
 

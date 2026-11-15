@@ -43,6 +43,10 @@ add_library(codec2_jni SHARED
     ${CODEC2_SRCS}
 )
 
+# Android 15/16 devices may use 16 KB memory pages.  Explicitly align ELF
+# load segments so this in-tree JNI library can load on those devices.
+target_link_options(codec2_jni PRIVATE "-Wl,-z,max-page-size=16384")
+
 find_library(log-lib log)
 find_library(m-lib m)
 

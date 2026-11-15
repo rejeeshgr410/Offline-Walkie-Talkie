@@ -3,6 +3,7 @@ package com.example.offlinewalkietalkie.transport
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 
 data class LocalIdentity(val endpointName: String)
 
@@ -17,7 +18,14 @@ data class Peer(
 
 data class IncomingFrame(val peerId: String, val bytes: ByteArray)
 
-data class ConnectionRequest(val peerId: String, val peerName: String, val authCode: String)
+data class ConnectionRequest(
+    val peerId: String,
+    val peerName: String,
+    val authCode: String,
+    /** Stable SHA-256 public identity fingerprint, when the bearer can advertise it. */
+    val identityKeyHex: String? = null
+)
+data class PairingConfirmation(val peerId: String, val authCode: String)
 
 enum class TransportState {
     IDLE, ACTIVE, ERROR
@@ -27,6 +35,8 @@ interface Transport {
     val state: StateFlow<TransportState>
     val peers: Flow<List<Peer>>
     val connectionRequests: Flow<ConnectionRequest>
+    val pendingConnectionRequest: StateFlow<ConnectionRequest?> get() = NO_PENDING_REQUEST
+    val pairingConfirmations: Flow<PairingConfirmation> get() = emptyFlow()
 
     /** Human-readable reason the last advertise/discover/connect attempt failed, or null. */
     val lastError: StateFlow<String?> get() = NO_ERROR
@@ -48,6 +58,7 @@ interface Transport {
 
     suspend fun connect(peerId: String)
     suspend fun acceptConnection(peerId: String)
+    suspend fun confirmPairing(peerId: String, authCode: String) {}
     suspend fun rejectConnection(peerId: String)
     suspend fun disconnect(peerId: String)
 
@@ -59,5 +70,6 @@ interface Transport {
     companion object {
         val NO_ERROR: StateFlow<String?> = MutableStateFlow(null)
         val ALWAYS_FALSE: StateFlow<Boolean> = MutableStateFlow(false)
+        val NO_PENDING_REQUEST: StateFlow<ConnectionRequest?> = MutableStateFlow(null)
     }
 }

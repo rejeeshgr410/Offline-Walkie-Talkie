@@ -11,10 +11,8 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalConfiguration
 import com.example.offlinewalkietalkie.protocol.FloorState
 import com.example.offlinewalkietalkie.service.AssistantSkillReceiver
 import com.example.offlinewalkietalkie.service.FloatingPttService
@@ -84,30 +82,41 @@ class MainActivity : ComponentActivity() {
             addAction(FloatingPttService.BROADCAST_PTT_PRESS)
             addAction(FloatingPttService.BROADCAST_PTT_RELEASE)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(floatingPttReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(floatingPttReceiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            this,
+            floatingPttReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
 
         // Handle initial launch intent
         handleIntent(intent, null)
 
         setContent {
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                // Outer cover display adaptation for Clamshell / Flip devices (Vivo X Flip / Z Flip / Razr)
-                if (maxHeight < 450.dp || maxWidth < 340.dp) {
-                    CoverScreenCockpit(viewModel = viewModel)
-                } else {
-                    MainNavigation(viewModel = viewModel)
-                }
+            val configuration = LocalConfiguration.current
+            val isCompactCover = configuration.screenHeightDp < 450 &&
+                configuration.screenWidthDp < 340
+            // Use the stable display configuration rather than transient layout
+            // constraints. Some normal phones report zero-sized Compose
+            // constraints during the first frame, which previously locked them
+            // into the cover-only cockpit and made pairing unreachable.
+            if (isCompactCover) {
+                CoverScreenCockpit(viewModel = viewModel)
+            } else {
+                MainNavigation(viewModel = viewModel)
             }
         }
     }
 
     override fun onResume() {
         super.onResume()
+        viewModel.onActivityVisible()
         viewModel.refreshLocation()
+    }
+
+    override fun onPause() {
+        viewModel.onActivityHidden()
+        super.onPause()
     }
 
     override fun onNewIntent(intent: Intent) {

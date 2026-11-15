@@ -4,15 +4,22 @@ import android.content.Context
 import com.example.offlinewalkietalkie.util.CapabilityManager
 
 /**
- * Vivo-Style Walkie-Talkie Transport Selection Policy.
+ * TalkLoop transport capability policy.
  *
- * Direct Bluetooth LE (GATT / Coded PHY) is the dedicated, universal transport medium:
- * - Sub-200ms connection latency.
- * - Up to 1 km outdoor line-of-sight range.
- * - Ultra-low battery consumption.
- * - 100% Offline: zero Wi-Fi, cellular, or Google Play Services dependency.
+ * BLE GATT is the conservative default while direct-link reliability is being
+ * field-qualified. Optional PHY requests and capability checks do not guarantee
+ * a negotiated PHY, a particular range, latency, or battery result.
  */
 object TransportSelector {
+
+    /** Bearers which are deliberately excluded from the normal release path. */
+    fun isExperimental(type: TransportType): Boolean = when (type) {
+        TransportType.BLE_L2CAP,
+        TransportType.WIFI_AWARE,
+        TransportType.WIFI_DIRECT,
+        TransportType.BLUETOOTH_CLASSIC -> true
+        else -> false
+    }
 
     fun selectTransport(
         context: Context,
@@ -20,27 +27,39 @@ object TransportSelector {
         isRelayMesh: Boolean = false,
         preferBleGatt: Boolean = true
     ): TransportType {
-        // Vivo OEM Walkie-Talkie transport medium: Direct BLE GATT
+        // Direct BLE GATT remains the release candidate until other bearers pass field tests.
         return TransportType.BLE_GATT
     }
 
     fun isTransportAvailable(context: Context, type: TransportType): Boolean {
         return when (type) {
             TransportType.BLE_GATT -> CapabilityManager.isBleSupported(context)
-            TransportType.BLE_L2CAP -> CapabilityManager.isBleSupported(context) && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
-            TransportType.WIFI_DIRECT -> CapabilityManager.isWifiDirectSupported(context)
-            TransportType.WIFI_AWARE -> CapabilityManager.isWifiAwareSupported(context)
+            // These bearers remain available only to explicit experimental builds.
+            // They are not safe to select in the shipping app until their own two-device
+            // pairing, audio, reconnect, and background test matrices are complete.
+            TransportType.BLE_L2CAP,
+            TransportType.WIFI_DIRECT,
+            TransportType.WIFI_AWARE -> false
             TransportType.NEARBY_CONNECTIONS -> CapabilityManager.isGooglePlayServicesAvailable(context)
-            TransportType.BLUETOOTH_CLASSIC -> CapabilityManager.isBluetoothEnabled(context)
+            // There is no Bluetooth Classic transport registered in TransportManager.
+            // Reporting it unavailable avoids silently falling back to a different bearer.
+            TransportType.BLUETOOTH_CLASSIC -> context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_BLUETOOTH)
         }
+    }
+
+    fun unavailableReason(context: Context, type: TransportType): String? = when {
+        isTransportAvailable(context, type) -> null
+        isExperimental(type) -> "Experimental transport; not enabled until physical qualification is complete"
+        type == TransportType.BLUETOOTH_CLASSIC -> "Bluetooth Classic is not implemented in this build"
+        else -> "Not supported on this device"
     }
 
     fun getDisplayName(type: TransportType): String {
         return when (type) {
-            TransportType.BLE_GATT -> "Bluetooth LE Long-Range (Vivo Coded PHY)"
-            TransportType.BLE_L2CAP -> "Bluetooth LE L2CAP CoC"
-            TransportType.WIFI_DIRECT -> "Wi-Fi Direct P2P"
-            TransportType.WIFI_AWARE -> "Wi-Fi Aware (NAN)"
+            TransportType.BLE_GATT -> "Bluetooth LE Direct"
+            TransportType.BLE_L2CAP -> "Bluetooth LE L2CAP CoC (Experimental)"
+            TransportType.WIFI_DIRECT -> "Wi-Fi Direct P2P (Experimental)"
+            TransportType.WIFI_AWARE -> "Wi-Fi Aware (Experimental)"
             TransportType.NEARBY_CONNECTIONS -> "Google Nearby Connections"
             TransportType.BLUETOOTH_CLASSIC -> "Bluetooth Classic RFCOMM"
         }

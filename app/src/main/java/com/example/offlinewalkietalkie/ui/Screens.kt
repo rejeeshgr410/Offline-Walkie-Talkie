@@ -1,5 +1,7 @@
 package com.example.offlinewalkietalkie.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -21,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,10 +38,12 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.offlinewalkietalkie.R
@@ -112,13 +117,13 @@ fun PermissionScreen(onPermissionsGranted: () -> Unit) {
                 }
                 Spacer(modifier = Modifier.height(18.dp))
                 Text(
-                    text = "TalkLoop",
+                    text = stringResource(R.string.app_name),
                     style = AppleLargeTitle,
                     color = AppleTextPrimary
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Offline Mesh Intercom • Zero Internet Required",
+                    text = stringResource(R.string.onboarding_tagline),
                     style = AppleCallout,
                     color = AppleTextSecondary
                 )
@@ -171,7 +176,7 @@ fun PermissionScreen(onPermissionsGranted: () -> Unit) {
                     shape = RoundedCornerShape(14.dp)
                 ) {
                     Text(
-                        text = "Continue",
+                        text = stringResource(R.string.continue_action),
                         style = AppleHeadline,
                         color = Color.White
                     )
@@ -186,7 +191,7 @@ fun PermissionScreen(onPermissionsGranted: () -> Unit) {
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = AppleTextSecondary),
                     border = androidx.compose.foundation.BorderStroke(1.dp, AppleGlassBorder)
                 ) {
-                    Text(text = "Skip to App", style = AppleBody, fontSize = 14.sp)
+                    Text(text = stringResource(R.string.skip_to_app), style = AppleBody, fontSize = 14.sp)
                 }
 
                 TextButton(
@@ -199,7 +204,7 @@ fun PermissionScreen(onPermissionsGranted: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Open App Settings",
+                        text = stringResource(R.string.open_settings),
                         style = AppleFootnote,
                         color = AppleTextTertiary
                     )
@@ -255,7 +260,7 @@ private fun PermissionItemCard(
             if (isGranted) {
                 Icon(
                     imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "Granted",
+                    contentDescription = stringResource(R.string.granted),
                     tint = AppleSystemGreen,
                     modifier = Modifier.size(22.dp)
                 )
@@ -290,6 +295,7 @@ fun HomeScreen(
     val speakerphoneEnabled by viewModel.speakerphoneEnabled.collectAsState()
     val isMuted by viewModel.isMuted.collectAsState()
     val isInSession by viewModel.isInSession.collectAsState()
+    val pendingRequest by viewModel.pendingRequest.collectAsState()
 
     val securedPeerCount by viewModel.securedPeerCount.collectAsState()
     val transportType by viewModel.transportType.collectAsState()
@@ -304,6 +310,13 @@ fun HomeScreen(
     val canInstantReplay by viewModel.canInstantReplay.collectAsState()
     val isInstantReplayPlaying by viewModel.isInstantReplayPlaying.collectAsState()
     val instantReplayDurationMs by viewModel.instantReplayDurationMs.collectAsState()
+
+    // A direct BLE link can finish service discovery while the user is on the
+    // home cockpit. Do not require them to first guess that they must open the
+    // Nearby page: bring the SAS confirmation screen forward on either side.
+    LaunchedEffect(pendingRequest?.peerId) {
+        if (pendingRequest != null) onNavigateToPairing()
+    }
 
     if (showSosModal) {
         SosBroadcastModal(
@@ -394,7 +407,7 @@ fun HomeScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = "Incoming Connection Request",
+                                        text = stringResource(R.string.incoming_connection_request),
                                         style = AppleCaption1,
                                         color = Color(0xFFE60023)
                                     )
@@ -427,14 +440,14 @@ fun HomeScreen(
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE60023), contentColor = Color.White),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
-                                    Text("Confirm Match", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Text(stringResource(R.string.confirm_match), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                                 OutlinedButton(
                                     onClick = { viewModel.rejectConnection(req.peerId) },
                                     modifier = Modifier.weight(1f).height(38.dp),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
-                                    Text("Reject", fontSize = 12.sp)
+                                    Text(stringResource(R.string.reject), fontSize = 12.sp)
                                 }
                             }
                         }
@@ -542,12 +555,15 @@ private fun TopHeaderBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Left: TalkLoop Logo + Title + Subtitle
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
             TalkLoopLogo(
                 modifier = Modifier.size(width = 30.dp, height = 24.dp)
             )
             Spacer(modifier = Modifier.width(10.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "TalkLoop",
                     style = AppleHeadline.copy(
@@ -555,14 +571,16 @@ private fun TopHeaderBar(
                         fontWeight = FontWeight.Bold,
                         color = AppleTextPrimary,
                         letterSpacing = (-0.4).sp
-                    )
+                    ),
+                    maxLines = 1
                 )
                 Text(
-                    text = "Offline Walkie-Talkie",
+                    text = stringResource(R.string.app_descriptor),
                     style = AppleCaption1.copy(
                         fontSize = 12.sp,
                         color = AppleTextSecondary
-                    )
+                    ),
+                    maxLines = 1
                 )
             }
         }
@@ -576,7 +594,7 @@ private fun TopHeaderBar(
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(48.dp)
                     .shadow(1.5.dp, CircleShape, spotColor = Color(0x10000000))
                     .clip(CircleShape)
                     .background(Color.White)
@@ -585,7 +603,7 @@ private fun TopHeaderBar(
             ) {
                 Icon(
                     imageVector = Icons.Default.Navigation,
-                    contentDescription = "Map & Compass",
+                    contentDescription = stringResource(R.string.map_compass),
                     tint = AppleTextPrimary,
                     modifier = Modifier.size(18.dp)
                 )
@@ -595,7 +613,7 @@ private fun TopHeaderBar(
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(48.dp)
                     .shadow(1.5.dp, CircleShape, spotColor = Color(0x10000000))
                     .clip(CircleShape)
                     .background(Color.White)
@@ -604,7 +622,7 @@ private fun TopHeaderBar(
             ) {
                 Icon(
                     imageVector = Icons.Default.WifiTethering,
-                    contentDescription = "Radar",
+                    contentDescription = stringResource(R.string.radar),
                     tint = AppleTextPrimary,
                     modifier = Modifier.size(18.dp)
                 )
@@ -617,20 +635,20 @@ private fun TopHeaderBar(
                     containerColor = Color.Transparent,
                     contentColor = Color.White
                 ),
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(24.dp),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                 modifier = Modifier
-                    .height(34.dp)
-                    .shadow(2.dp, RoundedCornerShape(18.dp), spotColor = Color(0xFFE60023).copy(alpha = 0.4f))
+                    .height(48.dp)
+                    .shadow(2.dp, RoundedCornerShape(24.dp), spotColor = Color(0xFFE60023).copy(alpha = 0.4f))
                     .background(
                         Brush.horizontalGradient(
                             listOf(Color(0xFFE60023), Color(0xFFFF1E27))
                         ),
-                        RoundedCornerShape(18.dp)
+                        RoundedCornerShape(24.dp)
                     )
             ) {
                 Text(
-                    text = if (isBroadcastingSos) "SOS ON" else "SOS",
+                    text = if (isBroadcastingSos) stringResource(R.string.sos_on) else "SOS",
                     fontWeight = FontWeight.Bold,
                     fontSize = 12.sp,
                     color = Color.White,
@@ -654,6 +672,7 @@ private fun StatusPillBar(
             .clip(RoundedCornerShape(24.dp))
             .background(Color.White)
             .border(0.75.dp, AppleGlassBorder, RoundedCornerShape(24.dp))
+            .heightIn(min = 48.dp)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 9.dp)
     ) {
@@ -670,7 +689,7 @@ private fun StatusPillBar(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "Ready to Talk",
+                text = stringResource(R.string.ready_to_talk),
                 style = AppleHeadline.copy(
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
@@ -693,7 +712,11 @@ private fun StatusPillBar(
             )
             Spacer(modifier = Modifier.width(5.dp))
             Text(
-                text = if (connectedCount > 0) "$connectedCount Connected" else "Auto-Discovery On",
+                text = if (connectedCount > 0) {
+                    pluralStringResource(R.plurals.connected_devices_count, connectedCount, connectedCount)
+                } else {
+                    stringResource(R.string.auto_discovery_on)
+                },
                 style = AppleFootnote.copy(
                     fontSize = 12.sp,
                     color = AppleTextSecondary
@@ -701,7 +724,7 @@ private fun StatusPillBar(
             )
             Spacer(modifier = Modifier.weight(1f))
             Icon(
-                imageVector = Icons.Default.ChevronRight,
+                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                 contentDescription = null,
                 tint = AppleTextTertiary,
                 modifier = Modifier.size(16.dp)
@@ -715,8 +738,10 @@ private fun QuickCircleAction(
     icon: ImageVector,
     label: String,
     isActive: Boolean,
+    emphasizeActive: Boolean = false,
     onClick: () -> Unit
 ) {
+    val showAccent = isActive && emphasizeActive
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(5.dp)
@@ -728,20 +753,20 @@ private fun QuickCircleAction(
                 .shadow(2.dp, CircleShape, spotColor = Color(0x10000000))
                 .clip(CircleShape)
                 .background(Color.White)
-                .border(0.75.dp, if (isActive && label == "Mute") Color(0xFFFF2A3A) else AppleGlassBorder, CircleShape)
+                .border(0.75.dp, if (showAccent) Color(0xFFFF2A3A) else AppleGlassBorder, CircleShape)
                 .clickable(onClick = onClick)
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (isActive && label == "Mute") Color(0xFFE60023) else AppleTextPrimary,
+                tint = if (showAccent) Color(0xFFE60023) else AppleTextPrimary,
                 modifier = Modifier.size(24.dp)
             )
         }
         Text(
             text = label,
             style = AppleFootnote.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
-            color = if (isActive && label == "Mute") Color(0xFFE60023) else AppleTextPrimary
+            color = if (showAccent) Color(0xFFE60023) else AppleTextPrimary
         )
     }
 }
@@ -865,10 +890,10 @@ private fun ActiveSessionContent(
                 onDismissRequest = { showMuteConfirmation = false },
                 containerColor = Color.White,
                 shape = RoundedCornerShape(20.dp),
-                title = { Text("Mute Live Audio?", style = AppleTitle3, color = AppleTextPrimary) },
+                title = { Text(stringResource(R.string.mute_live_audio_title), style = AppleTitle3, color = AppleTextPrimary) },
                 text = {
                     Text(
-                        "You won't hear peers in real time while muted. Incoming voice transmissions are still recorded in Voice History.",
+                        stringResource(R.string.mute_live_audio_explanation),
                         style = AppleFootnote,
                         color = AppleTextSecondary
                     )
@@ -881,11 +906,11 @@ private fun ActiveSessionContent(
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = AppleSystemOrange),
                         shape = RoundedCornerShape(10.dp)
-                    ) { Text("Mute Audio", fontWeight = FontWeight.Bold, color = Color.White) }
+                    ) { Text(stringResource(R.string.mute_audio), fontWeight = FontWeight.Bold, color = Color.White) }
                 },
                 dismissButton = {
                     TextButton(onClick = { showMuteConfirmation = false }) {
-                        Text("Cancel", color = AppleTextSecondary)
+                        Text(stringResource(R.string.cancel), color = AppleTextSecondary)
                     }
                 }
             )
@@ -915,13 +940,13 @@ private fun ActiveSessionContent(
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Live Audio Muted",
+                                text = stringResource(R.string.live_audio_muted),
                                 style = AppleHeadline,
                                 color = AppleSystemOrange,
                                 fontSize = 13.sp
                             )
                             Text(
-                                text = "Transmissions saved to Voice History",
+                                text = stringResource(R.string.transmissions_saved),
                                 style = AppleCaption1,
                                 color = AppleTextSecondary
                             )
@@ -937,7 +962,7 @@ private fun ActiveSessionContent(
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
                     ) {
-                        Text("Unmute", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(stringResource(R.string.unmute), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
@@ -961,20 +986,21 @@ private fun ActiveSessionContent(
         ) {
             QuickCircleAction(
                 icon = if (speakerphoneEnabled) Icons.Default.VolumeUp else Icons.Default.Headset,
-                label = "Speaker",
+                label = stringResource(R.string.speaker),
                 isActive = speakerphoneEnabled,
                 onClick = onToggleSpeaker
             )
             QuickCircleAction(
                 icon = Icons.Default.Headphones,
-                label = "Monitor",
+                label = stringResource(R.string.monitor),
                 isActive = isRelayModeActive,
                 onClick = onToggleRelay
             )
             QuickCircleAction(
                 icon = if (isMuted) Icons.Default.MicOff else Icons.Default.MicOff,
-                label = "Mute",
+                label = stringResource(R.string.mute),
                 isActive = isMuted,
+                emphasizeActive = true,
                 onClick = {
                     if (isMuted) onToggleMute() else showMuteConfirmation = true
                 }
@@ -1013,7 +1039,7 @@ private fun ActiveSessionContent(
                         Spacer(modifier = Modifier.width(14.dp))
                         Column {
                             Text(
-                                text = if (connectedPeers.isNotEmpty()) channelName else "Direct Walkie-Talkie",
+                                text = if (connectedPeers.isNotEmpty()) channelName else stringResource(R.string.direct_walkie_talkie),
                                 style = AppleHeadline.copy(
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
@@ -1022,16 +1048,17 @@ private fun ActiveSessionContent(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = if (connectedPeers.isNotEmpty())
-                                    "${connectedPeers.size} device(s) online"
-                                else
-                                    "1 device online",
+                                text = pluralStringResource(
+                                    R.plurals.devices_online_count,
+                                    connectedPeers.size.coerceAtLeast(1),
+                                    connectedPeers.size.coerceAtLeast(1)
+                                ),
                                 style = AppleFootnote.copy(fontSize = 12.sp, color = AppleTextSecondary)
                             )
                         }
                     }
                     Icon(
-                        imageVector = Icons.Default.ChevronRight,
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                         contentDescription = null,
                         tint = AppleTextTertiary,
                         modifier = Modifier.size(18.dp)
@@ -1048,8 +1075,8 @@ private fun ActiveSessionContent(
                     ) {
                         val isYouSpeaking = floorState is FloorState.HeldByMe || floorState is FloorState.Talking || floorState is FloorState.Granted
                         AvatarBadge(
-                            name = "You",
-                            initials = "ME",
+                            name = stringResource(R.string.you),
+                            initials = stringResource(R.string.me_initials),
                             isSpeaking = isYouSpeaking,
                             isOnline = true,
                             isRelay = false,
@@ -1079,16 +1106,16 @@ private fun ActiveSessionContent(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             BentoActionCard(
-                title = "Nearby Devices",
-                subtitle = "Scan & Pair",
+                title = stringResource(R.string.nearby_devices),
+                subtitle = stringResource(R.string.scan_pair),
                 icon = Icons.Default.WifiTethering,
                 iconTint = Color(0xFFE60023),
                 onClick = onNavigateToNearby,
                 modifier = Modifier.weight(1f)
             )
             BentoActionCard(
-                title = "Mesh Relay",
-                subtitle = if (isRelayModeActive) "Active" else "Standby",
+                title = stringResource(R.string.mesh_relay),
+                subtitle = if (isRelayModeActive) stringResource(R.string.active) else stringResource(R.string.standby),
                 icon = Icons.Default.Hub,
                 iconTint = Color(0xFFE60023),
                 statusDot = Color(0xFF00C853),
@@ -1101,21 +1128,23 @@ private fun ActiveSessionContent(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            val replaySub = if (instantReplayDurationMs > 0)
-                "Last ${minOf(10, (instantReplayDurationMs / 1000).coerceAtLeast(1))}s"
-            else
-                "Last 2s"
+            val replaySeconds = if (instantReplayDurationMs > 0) {
+                minOf(10, (instantReplayDurationMs / 1000).coerceAtLeast(1)).toInt()
+            } else {
+                2
+            }
+            val replaySub = stringResource(R.string.last_seconds, replaySeconds)
             BentoActionCard(
-                title = "Instant Replay",
-                subtitle = if (isInstantReplayPlaying) "Playing..." else replaySub,
+                title = stringResource(R.string.instant_replay),
+                subtitle = if (isInstantReplayPlaying) stringResource(R.string.playing) else replaySub,
                 icon = Icons.Default.Replay,
                 iconTint = Color(0xFFE60023),
                 onClick = onReplayLast,
                 modifier = Modifier.weight(1f)
             )
             BentoActionCard(
-                title = "Security",
-                subtitle = if (securedPeerCount > 0) "Encrypted ($securedPeerCount)" else "Direct Link",
+                title = stringResource(R.string.security),
+                subtitle = if (securedPeerCount > 0) stringResource(R.string.encrypted_peer_count, securedPeerCount) else stringResource(R.string.direct_link),
                 icon = Icons.Default.Shield,
                 iconTint = Color(0xFFE60023),
                 hasLock = true,
@@ -1137,7 +1166,7 @@ private fun ActiveSessionContent(
             ) {
                 Icon(Icons.Default.ExitToApp, contentDescription = null, modifier = Modifier.size(17.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Leave Channel", style = AppleHeadline, fontSize = 13.sp)
+                Text(text = stringResource(R.string.leave_channel), style = AppleHeadline, fontSize = 13.sp)
             }
         }
     }
@@ -1269,10 +1298,10 @@ private fun BottomNavigationBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             val tabs: List<Pair<String, ImageVector>> = listOf(
-                Pair("Walkie", Icons.Default.Radio),
-                Pair("Messages", Icons.Default.ChatBubbleOutline),
-                Pair("Contacts", Icons.Default.PeopleOutline),
-                Pair("Settings", Icons.Default.Settings)
+                Pair(stringResource(R.string.walkie), Icons.Default.Radio),
+                Pair(stringResource(R.string.messages), Icons.Default.ChatBubbleOutline),
+                Pair(stringResource(R.string.contacts), Icons.Default.PeopleOutline),
+                Pair(stringResource(R.string.settings), Icons.Default.Settings)
             )
 
             tabs.forEachIndexed { index, pair ->
@@ -1345,6 +1374,10 @@ fun NearbyDevicesScreen(
     val transportError by viewModel.transportError.collectAsState()
     val transportType by viewModel.transportType.collectAsState()
     val peerTelemetry by viewModel.peerTelemetry.collectAsState()
+    val discoverabilityText = stringResource(
+        if (isAdvertising) R.string.discoverable else R.string.not_discoverable
+    )
+    val scanningText = stringResource(if (isDiscovering) R.string.scanning else R.string.idle)
 
     val wifiManager = remember {
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
@@ -1379,15 +1412,15 @@ fun NearbyDevicesScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                 }
                 Column {
                     Text(
-                        text = "Nearby Devices",
+                        text = stringResource(R.string.nearby_devices),
                         style = AppleTitle2
                     )
                     Text(
-                        text = "AirDrop-style local Bluetooth discovery",
+                        text = stringResource(R.string.nearby_discovery_subtitle),
                         style = AppleFootnote,
                         color = AppleTextSecondary
                     )
@@ -1404,21 +1437,25 @@ fun NearbyDevicesScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Visible as \"${viewModel.localDeviceName}\"",
+                        text = stringResource(R.string.visible_as, viewModel.localDeviceName),
                         style = AppleHeadline
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = buildString {
-                            append(if (isAdvertising) "Discoverable" else "Not Discoverable")
-                            append(" • ")
-                            append(if (isDiscovering) "Scanning" else "Idle")
-                        },
+                        text = "$discoverabilityText • $scanningText",
                         style = AppleFootnote,
                         color = if (isAdvertising && isDiscovering) AppleSystemGreen else AppleSystemOrange
                     )
+                    TextButton(onClick = {
+                        viewModel.setTransportType(if (transportType == com.example.offlinewalkietalkie.transport.TransportType.BLUETOOTH_CLASSIC)
+                            com.example.offlinewalkietalkie.transport.TransportType.BLE_GATT
+                        else com.example.offlinewalkietalkie.transport.TransportType.BLUETOOTH_CLASSIC)
+                    }) {
+                        Text(if (transportType == com.example.offlinewalkietalkie.transport.TransportType.BLUETOOTH_CLASSIC)
+                            "Use Bluetooth LE" else "Try Bluetooth Classic")
+                    }
                     Text(
-                        text = "Keep this screen open on both devices to establish an offline link.",
+                        text = stringResource(R.string.keep_nearby_open),
                         style = AppleCaption1,
                         color = AppleTextTertiary,
                         modifier = Modifier.padding(top = 4.dp)
@@ -1437,7 +1474,7 @@ fun NearbyDevicesScreen(
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(
-                text = "DISCOVERED PEERS (${peers.size})",
+                text = stringResource(R.string.discovered_peers_count, peers.size),
                 style = AppleCaption2,
                 modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
             )
@@ -1453,13 +1490,13 @@ fun NearbyDevicesScreen(
                         CircularProgressIndicator(color = Color(0xFFE60023), strokeWidth = 2.5.dp, modifier = Modifier.size(36.dp))
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = "Searching for Nearby Devices…",
+                            text = stringResource(R.string.searching_nearby_devices),
                             style = AppleHeadline,
                             color = AppleTextSecondary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Ensure TalkLoop is running on the other phone.",
+                            text = stringResource(R.string.ensure_other_phone),
                             style = AppleFootnote,
                             color = AppleTextTertiary
                         )
@@ -1503,9 +1540,9 @@ fun NearbyDevicesScreen(
                                         style = AppleHeadline
                                     )
                                     val statusText = when {
-                                        peer.isConnected && peer.isAuthenticated -> if (peer.isDirect) "Connected • Direct Radio • Encrypted" else "Connected • Mesh Relay (${peer.hopCount} Hops)"
-                                        peer.isConnected && !peer.isAuthenticated -> "Authenticating • Securing Link…"
-                                        else -> "Nearby • Tap Connect"
+                                        peer.isConnected && peer.isAuthenticated -> if (peer.isDirect) stringResource(R.string.peer_connected_direct) else stringResource(R.string.peer_connected_mesh, peer.hopCount)
+                                        peer.isConnected && !peer.isAuthenticated -> stringResource(R.string.peer_authenticating)
+                                        else -> stringResource(R.string.peer_nearby_connect)
                                     }
                                     val statusColor = when {
                                         peer.isConnected && peer.isAuthenticated -> AppleSystemGreen
@@ -1536,7 +1573,7 @@ fun NearbyDevicesScreen(
                                     modifier = Modifier.height(34.dp)
                                 ) {
                                     Text(
-                                        text = if (peer.isConnected) "Disconnect" else "Connect",
+                                        text = if (peer.isConnected) stringResource(R.string.disconnect) else stringResource(R.string.connect),
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 12.sp
                                     )
@@ -1563,6 +1600,7 @@ fun PairingScreen(
     val request by viewModel.pendingRequest.collectAsState()
     val isOutdoorMode by viewModel.isOutdoorMode.collectAsState()
     val isInSession by viewModel.isInSession.collectAsState()
+    val transportError by viewModel.transportError.collectAsState()
     var accepted by remember { mutableStateOf(false) }
     var dismissed by remember { mutableStateOf(false) }
 
@@ -1570,6 +1608,16 @@ fun PairingScreen(
         if (isInSession && !dismissed) {
             dismissed = true
             onPaired()
+        }
+    }
+
+    // A rejection is delivered by the bearer before it tears the GATT link
+    // down. Do not leave the other phone stranded on an empty verification
+    // spinner after its partner has already refused the identity.
+    LaunchedEffect(request, transportError) {
+        if (request == null && transportError?.contains("rejected", ignoreCase = true) == true && !dismissed) {
+            dismissed = true
+            onBack()
         }
     }
 
@@ -1590,10 +1638,10 @@ fun PairingScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                 }
                 Text(
-                    text = "Verify Identity",
+                    text = stringResource(R.string.verify_identity),
                     style = AppleTitle2
                 )
             }
@@ -1623,7 +1671,7 @@ fun PairingScreen(
                     } else {
                         val req = request ?: return@Column
                         Text(
-                            text = "Pairing with ${req.peerName}",
+                            text = stringResource(R.string.pairing_with, req.peerName),
                             style = AppleHeadline,
                             fontSize = 17.sp
                         )
@@ -1650,7 +1698,7 @@ fun PairingScreen(
 
                         Spacer(modifier = Modifier.height(14.dp))
                         Text(
-                            text = "Compare the 6 digits with your partner's screen. If they match, tap Confirm Match.",
+                            text = stringResource(R.string.pairing_compare_help),
                             style = AppleFootnote,
                             color = AppleTextSecondary,
                             textAlign = TextAlign.Center
@@ -1675,7 +1723,7 @@ fun PairingScreen(
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Text(
-                                    text = "Confirm Match",
+                                    text = stringResource(R.string.confirm_match),
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp
                                 )
@@ -1692,7 +1740,7 @@ fun PairingScreen(
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = AppleSystemRed),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, AppleSystemRed.copy(alpha = 0.5f))
                             ) {
-                                Text(text = "Reject", fontWeight = FontWeight.SemiBold)
+                                Text(text = stringResource(R.string.reject), fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -1726,9 +1774,82 @@ fun SettingsScreen(
 
     val isSurvivalMode by viewModel.isSurvivalCodecMode.collectAsState()
     val isFloatingActive by viewModel.isFloatingPttActive.collectAsState()
+    val adaptiveAudio by viewModel.adaptiveAudioEnabled.collectAsState()
+    val relayOnlyJoining by viewModel.relayOnlyJoining.collectAsState()
     val isVolumePtt by viewModel.isVolumeKeyPttEnabled.collectAsState()
     val isScoActive by viewModel.isBluetoothScoActive.collectAsState()
+    val linkTelemetry by viewModel.linkTelemetry.collectAsState()
+    val isLinkTestRunning by viewModel.isLinkTestRunning.collectAsState()
+    val diagnosticsReport by viewModel.diagnosticsReport.collectAsState()
+    var showDiagnosticsReport by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val shareReportLabel = stringResource(R.string.share_report)
+
+    LaunchedEffect(diagnosticsReport) {
+        if (diagnosticsReport != null) showDiagnosticsReport = true
+    }
+
+    if (showDiagnosticsReport && diagnosticsReport != null) {
+        val report = diagnosticsReport.orEmpty()
+        AlertDialog(
+            onDismissRequest = {
+                showDiagnosticsReport = false
+                viewModel.clearDiagnosticsReport()
+            },
+            title = { Text(stringResource(R.string.diagnostics_report_title), style = AppleTitle2) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        stringResource(R.string.diagnostics_privacy_notice),
+                        style = AppleFootnote,
+                        color = AppleSystemGreen
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        report,
+                        style = AppleMonospacedDigits.copy(fontSize = 11.sp),
+                        color = AppleTextPrimary
+                    )
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("TalkLoop diagnostics", report))
+                        },
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) { Text(stringResource(R.string.copy_report)) }
+                    TextButton(
+                        onClick = {
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, "TalkLoop redacted diagnostics")
+                                putExtra(Intent.EXTRA_TEXT, report)
+                            }
+                            context.startActivity(Intent.createChooser(shareIntent, shareReportLabel))
+                        },
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) { Text(stringResource(R.string.share_report)) }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showDiagnosticsReport = false
+                        viewModel.clearDiagnosticsReport()
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) { Text(stringResource(R.string.close)) }
+            }
+        )
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -1755,19 +1876,22 @@ fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                 }
                 Text(
-                    text = "Settings",
+                    text = stringResource(R.string.settings),
                     style = AppleLargeTitle,
-                    fontSize = 28.sp
+                    fontSize = 28.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
             }
 
             // GROUP 1: AUDIO & RANGE
             Column {
                 Text(
-                    text = "AUDIO & CODEC",
+                    text = stringResource(R.string.audio_codec_section),
                     style = AppleCaption2,
                     modifier = Modifier.padding(start = 14.dp, bottom = 6.dp)
                 )
@@ -1795,7 +1919,7 @@ fun SettingsScreen(
                                 Spacer(Modifier.width(12.dp))
                                 Column {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("Survival Range Mode", style = AppleHeadline, fontSize = 14.sp)
+                                        Text(stringResource(R.string.survival_range_mode), style = AppleHeadline, fontSize = 14.sp)
                                         if (isSurvivalMode) {
                                             Spacer(Modifier.width(6.dp))
                                             Text(
@@ -1808,8 +1932,8 @@ fun SettingsScreen(
                                         }
                                     }
                                     Text(
-                                        if (isSurvivalMode) "Codec 2 active: 8-byte micro-frames for extreme RF penetration"
-                                        else "AMR-NB active: Natural voice clarity. Switch for weak signals.",
+                                        if (isSurvivalMode) stringResource(R.string.survival_codec_active)
+                                        else stringResource(R.string.standard_codec_active),
                                         style = AppleFootnote,
                                         color = AppleTextSecondary
                                     )
@@ -1823,6 +1947,19 @@ fun SettingsScreen(
                                     checkedTrackColor = AppleSystemGreen
                                 )
                             )
+                        }
+
+                        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text("Adaptive audio", style = AppleHeadline)
+                            Switch(checked = adaptiveAudio, onCheckedChange = viewModel::setAdaptiveAudioEnabled)
+                        }
+                        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text("Join groups as relay only", style = AppleHeadline)
+                            Switch(checked = relayOnlyJoining, onCheckedChange = viewModel::setRelayOnlyJoining)
                         }
 
                         HorizontalDivider(color = AppleGlassBorder)
@@ -1841,8 +1978,14 @@ fun SettingsScreen(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text("Audio Output Route", style = AppleHeadline, fontSize = 14.sp)
-                                    Text("Active: " + currentAudioRoute.displayName, style = AppleFootnote, color = Color(0xFFE60023))
+                                    Text(stringResource(R.string.audio_output_route), style = AppleHeadline, fontSize = 14.sp)
+                                    val activeRouteLabel = when (currentAudioRoute) {
+                                        AudioRoute.SPEAKER -> stringResource(R.string.speaker)
+                                        AudioRoute.EARPIECE -> stringResource(R.string.earpiece)
+                                        AudioRoute.BLUETOOTH_SCO -> stringResource(R.string.bluetooth_headset_short)
+                                        AudioRoute.WIRED_HEADSET -> stringResource(R.string.wired_headset_short)
+                                    }
+                                    Text(stringResource(R.string.active_route, activeRouteLabel), style = AppleFootnote, color = Color(0xFFE60023))
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
@@ -1863,10 +2006,10 @@ fun SettingsScreen(
                                     ) {
                                         Text(
                                             when (route) {
-                                                AudioRoute.SPEAKER -> "Speaker"
-                                                AudioRoute.EARPIECE -> "Earpiece"
-                                                AudioRoute.BLUETOOTH_SCO -> "BT Headset"
-                                                AudioRoute.WIRED_HEADSET -> "Wired"
+                                                AudioRoute.SPEAKER -> stringResource(R.string.speaker)
+                                                AudioRoute.EARPIECE -> stringResource(R.string.earpiece)
+                                                AudioRoute.BLUETOOTH_SCO -> stringResource(R.string.bluetooth_headset_short)
+                                                AudioRoute.WIRED_HEADSET -> stringResource(R.string.wired_headset_short)
                                             },
                                             style = AppleCaption1,
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
@@ -1898,8 +2041,18 @@ fun SettingsScreen(
                                     }
                                     Spacer(Modifier.width(12.dp))
                                     Column {
-                                        Text("Roger Beep & PTT Chimes", style = AppleHeadline, fontSize = 14.sp)
-                                        Text(rogerBeepStyle.displayName + " • " + rogerBeepStyle.description, style = AppleFootnote, color = AppleTextSecondary)
+                                        Text(stringResource(R.string.roger_beep_chimes), style = AppleHeadline, fontSize = 14.sp)
+                                        Text(
+                                            when (rogerBeepStyle) {
+                                                RogerBeepStyle.MOTOROLA -> stringResource(R.string.roger_motorola_description)
+                                                RogerBeepStyle.QUINDAR -> stringResource(R.string.roger_quindar_description)
+                                                RogerBeepStyle.TACTICAL_CHIRP -> stringResource(R.string.roger_tactical_description)
+                                                RogerBeepStyle.SQUELCH -> stringResource(R.string.roger_squelch_description)
+                                                RogerBeepStyle.NONE -> stringResource(R.string.roger_silent_description)
+                                            },
+                                            style = AppleFootnote,
+                                            color = AppleTextSecondary
+                                        )
                                     }
                                 }
                                 if (rogerBeepStyle != RogerBeepStyle.NONE) {
@@ -1911,9 +2064,9 @@ fun SettingsScreen(
                                             .padding(horizontal = 10.dp, vertical = 6.dp)
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.PlayArrow, contentDescription = "Preview Tone", tint = Color(0xFFE60023), modifier = Modifier.size(14.dp))
+                                            Icon(Icons.Default.PlayArrow, contentDescription = stringResource(R.string.preview_tone), tint = Color(0xFFE60023), modifier = Modifier.size(14.dp))
                                             Spacer(Modifier.width(4.dp))
-                                            Text("Preview", style = AppleCaption1, fontWeight = FontWeight.Bold, color = Color(0xFFE60023))
+                                            Text(stringResource(R.string.preview), style = AppleCaption1, fontWeight = FontWeight.Bold, color = Color(0xFFE60023))
                                         }
                                     }
                                 }
@@ -1937,10 +2090,10 @@ fun SettingsScreen(
                                         ) {
                                             Text(
                                                 when (style) {
-                                                    RogerBeepStyle.MOTOROLA -> "Motorola"
-                                                    RogerBeepStyle.QUINDAR -> "Quindar"
-                                                    RogerBeepStyle.TACTICAL_CHIRP -> "Tactical"
-                                                    else -> style.displayName
+                                                    RogerBeepStyle.MOTOROLA -> stringResource(R.string.roger_motorola)
+                                                    RogerBeepStyle.QUINDAR -> stringResource(R.string.roger_quindar)
+                                                    RogerBeepStyle.TACTICAL_CHIRP -> stringResource(R.string.roger_tactical)
+                                                    else -> stringResource(R.string.roger_silent)
                                                 },
                                                 style = AppleCaption1,
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
@@ -1966,9 +2119,9 @@ fun SettingsScreen(
                                         ) {
                                             Text(
                                                 when (style) {
-                                                    RogerBeepStyle.SQUELCH -> "Tone Squelch"
-                                                    RogerBeepStyle.NONE -> "Silent (Covert)"
-                                                    else -> style.displayName
+                                                    RogerBeepStyle.SQUELCH -> stringResource(R.string.roger_squelch)
+                                                    RogerBeepStyle.NONE -> stringResource(R.string.roger_silent)
+                                                    else -> stringResource(R.string.roger_silent)
                                                 },
                                                 style = AppleCaption1,
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
@@ -2001,8 +2154,8 @@ fun SettingsScreen(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text("Bluetooth Headset", style = AppleHeadline, fontSize = 14.sp)
-                                    Text("Route voice to paired Bluetooth accessories", style = AppleFootnote, color = AppleTextSecondary)
+                                    Text(stringResource(R.string.bluetooth_headset), style = AppleHeadline, fontSize = 14.sp)
+                                    Text(stringResource(R.string.bluetooth_headset_desc), style = AppleFootnote, color = AppleTextSecondary)
                                 }
                             }
                             Switch(
@@ -2037,8 +2190,8 @@ fun SettingsScreen(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text("Microphone Loopback", style = AppleHeadline, fontSize = 14.sp)
-                                    Text("Echo microphone locally to test audio", style = AppleFootnote, color = AppleTextSecondary)
+                                    Text(stringResource(R.string.microphone_loopback), style = AppleHeadline, fontSize = 14.sp)
+                                    Text(stringResource(R.string.microphone_loopback_desc), style = AppleFootnote, color = AppleTextSecondary)
                                 }
                             }
                             Switch(
@@ -2059,7 +2212,7 @@ fun SettingsScreen(
             // GROUP 2: MAPS & VECTOR TILES
             Column {
                 Text(
-                    text = "MAPS & TILES",
+                    text = stringResource(R.string.maps_tiles_section),
                     style = AppleCaption2,
                     modifier = Modifier.padding(start = 14.dp, bottom = 6.dp)
                 )
@@ -2087,11 +2240,11 @@ fun SettingsScreen(
                             }
                             Spacer(Modifier.width(12.dp))
                             Column {
-                                Text("Offline Vector Maps", style = AppleHeadline, fontSize = 14.sp)
-                                Text("Pre-bundled OSM road packs & search grids", style = AppleFootnote, color = AppleTextSecondary)
+                                Text(stringResource(R.string.offline_vector_maps), style = AppleHeadline, fontSize = 14.sp)
+                                Text(stringResource(R.string.offline_vector_maps_desc), style = AppleFootnote, color = AppleTextSecondary)
                             }
                         }
-                        Icon(Icons.Default.ChevronRight, null, tint = AppleTextTertiary, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = AppleTextTertiary, modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -2099,7 +2252,7 @@ fun SettingsScreen(
             // GROUP 3: CONTROLS & SYSTEM
             Column {
                 Text(
-                    text = "CONTROLS & OVERLAYS",
+                    text = stringResource(R.string.controls_overlays_section),
                     style = AppleCaption2,
                     modifier = Modifier.padding(start = 14.dp, bottom = 6.dp)
                 )
@@ -2125,8 +2278,8 @@ fun SettingsScreen(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text("Floating PTT Orb", style = AppleHeadline, fontSize = 14.sp)
-                                    Text("Movable talk button over Maps and Camera", style = AppleFootnote, color = AppleTextSecondary)
+                                    Text(stringResource(R.string.floating_ptt_orb), style = AppleHeadline, fontSize = 14.sp)
+                                    Text(stringResource(R.string.floating_ptt_orb_desc), style = AppleFootnote, color = AppleTextSecondary)
                                 }
                             }
                             Switch(
@@ -2175,8 +2328,8 @@ fun SettingsScreen(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text("Pocket Volume Key PTT", style = AppleHeadline, fontSize = 14.sp)
-                                    Text("Hold Volume Down while TalkLoop is on screen", style = AppleFootnote, color = AppleTextSecondary)
+                                    Text(stringResource(R.string.pocket_volume_ptt), style = AppleHeadline, fontSize = 14.sp)
+                                    Text(stringResource(R.string.pocket_volume_ptt_desc), style = AppleFootnote, color = AppleTextSecondary)
                                 }
                             }
                             Switch(
@@ -2222,10 +2375,10 @@ fun SettingsScreen(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text("Background Doze Exemption", style = AppleHeadline, fontSize = 14.sp)
+                                    Text(stringResource(R.string.background_doze_exemption), style = AppleHeadline, fontSize = 14.sp)
                                     Text(
-                                        if (isBatteryExempt) "Unrestricted • Zero packet drop in pocket/sleep"
-                                        else "Optimized • Tap to allow 60-min screen-off reception",
+                                        if (isBatteryExempt) stringResource(R.string.battery_unrestricted_desc)
+                                        else stringResource(R.string.battery_optimized_desc),
                                         style = AppleFootnote,
                                         color = if (isBatteryExempt) AppleSystemGreen else AppleSystemOrange
                                     )
@@ -2242,7 +2395,7 @@ fun SettingsScreen(
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                                     modifier = Modifier.height(30.dp)
                                 ) {
-                                    Text("Allow", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text(stringResource(R.string.allow), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -2270,8 +2423,8 @@ fun SettingsScreen(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text("Outdoor Sunlight Mode", style = AppleHeadline, fontSize = 14.sp)
-                                    Text("High-contrast opaque surfaces for direct sun", style = AppleFootnote, color = AppleTextSecondary)
+                                    Text(stringResource(R.string.outdoor_sunlight_mode), style = AppleHeadline, fontSize = 14.sp)
+                                    Text(stringResource(R.string.outdoor_sunlight_desc), style = AppleFootnote, color = AppleTextSecondary)
                                 }
                             }
                             Switch(
@@ -2287,10 +2440,106 @@ fun SettingsScreen(
                 }
             }
 
-            // GROUP 4: POLICY & MESSAGES
+            // GROUP 4: CONNECTION DIAGNOSTICS
             Column {
                 Text(
-                    text = "POLICY & PRIVACY",
+                    text = stringResource(R.string.connection_diagnostics),
+                    style = AppleCaption2,
+                    modifier = Modifier.padding(start = 14.dp, bottom = 6.dp)
+                )
+                GlassSurface(cornerRadius = 20.dp, isOutdoorMode = isOutdoorMode, modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(AppleSystemBlue.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.NetworkCheck, null, tint = AppleSystemBlue, modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(stringResource(R.string.offline_link_test), style = AppleHeadline, fontSize = 14.sp)
+                                Text(
+                                    when {
+                                        isLinkTestRunning -> stringResource(R.string.testing_link)
+                                        linkTelemetry.packetsSent > 0 -> stringResource(
+                                            R.string.link_test_complete,
+                                            linkTelemetry.packetsReceived,
+                                            linkTelemetry.packetsSent
+                                        )
+                                        else -> stringResource(R.string.link_test_connect_peer)
+                                    },
+                                    style = AppleFootnote,
+                                    color = AppleTextSecondary
+                                )
+                            }
+                            Text(
+                                "${linkTelemetry.qualityBars}/5",
+                                style = AppleMonospacedDigits.copy(fontSize = 13.sp),
+                                color = if (linkTelemetry.qualityBars >= 4) AppleSystemGreen else AppleSystemOrange
+                            )
+                        }
+
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            DiagnosticMetric(
+                                label = stringResource(R.string.rtt_label),
+                                value = if (linkTelemetry.rttMs > 0) stringResource(R.string.milliseconds_value, linkTelemetry.rttMs.toString()) else "—",
+                                modifier = Modifier.weight(1f)
+                            )
+                            DiagnosticMetric(
+                                label = stringResource(R.string.loss_label),
+                                value = "${"%.0f".format(linkTelemetry.packetLossPercent)}%",
+                                modifier = Modifier.weight(1f)
+                            )
+                            DiagnosticMetric(
+                                label = stringResource(R.string.jitter_label),
+                                value = stringResource(R.string.milliseconds_value, "%.1f".format(linkTelemetry.jitterMs)),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        Button(
+                            onClick = viewModel::runLinkTest,
+                            enabled = !isLinkTestRunning,
+                            colors = ButtonDefaults.buttonColors(containerColor = AppleSystemBlue, contentColor = Color.White),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        ) {
+                            if (isLinkTestRunning) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(10.dp))
+                            }
+                            Text(
+                                if (isLinkTestRunning) stringResource(R.string.testing_link)
+                                else stringResource(R.string.run_link_test),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = { viewModel.generateRedactedDiagnostics() },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        ) {
+                            Icon(Icons.Default.PrivacyTip, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.generate_redacted_report), fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+
+            // GROUP 5: POLICY & MESSAGES
+            Column {
+                Text(
+                    text = stringResource(R.string.policy_privacy_section),
                     style = AppleCaption2,
                     modifier = Modifier.padding(start = 14.dp, bottom = 6.dp)
                 )
@@ -2316,8 +2565,13 @@ fun SettingsScreen(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text("Allow Incoming Requests", style = AppleHeadline, fontSize = 14.sp)
-                                    Text(if (allowIncomingRequests) "New devices prompt for verification" else "Incoming connections rejected", style = AppleFootnote, color = AppleTextSecondary)
+                                    Text(stringResource(R.string.allow_incoming_requests), style = AppleHeadline, fontSize = 14.sp)
+                                    Text(
+                                        if (allowIncomingRequests) stringResource(R.string.incoming_verification_desc)
+                                        else stringResource(R.string.incoming_rejected_desc),
+                                        style = AppleFootnote,
+                                        color = AppleTextSecondary
+                                    )
                                 }
                             }
                             Switch(
@@ -2352,8 +2606,8 @@ fun SettingsScreen(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text("Disturbance Mode", style = AppleHeadline, fontSize = 14.sp)
-                                    Text("Keep SOS banners visible while silencing audio siren", style = AppleFootnote, color = AppleTextSecondary)
+                                    Text(stringResource(R.string.disturbance_mode), style = AppleHeadline, fontSize = 14.sp)
+                                    Text(stringResource(R.string.disturbance_mode_desc), style = AppleFootnote, color = AppleTextSecondary)
                                 }
                             }
                             Switch(
@@ -2374,7 +2628,7 @@ fun SettingsScreen(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth().height(42.dp)
                         ) {
-                            Text("Mark Received Messages Read", style = AppleHeadline, fontSize = 13.sp)
+                            Text(stringResource(R.string.mark_messages_read), style = AppleHeadline, fontSize = 13.sp)
                         }
                     }
                 }
@@ -2382,6 +2636,21 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(16.dp))
         }
+    }
+}
+
+@Composable
+private fun DiagnosticMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(AppleCardSurfaceSecondary)
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(label, style = AppleCaption2, color = AppleTextSecondary, maxLines = 1)
+        Spacer(Modifier.height(3.dp))
+        Text(value, style = AppleMonospacedDigits.copy(fontSize = 12.sp), color = AppleTextPrimary, maxLines = 1)
     }
 }
 
@@ -2411,10 +2680,10 @@ fun ContactsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                 }
                 Text(
-                    text = "Contacts",
+                    text = stringResource(R.string.contacts),
                     style = AppleLargeTitle,
                     fontSize = 28.sp
                 )
@@ -2429,12 +2698,12 @@ fun ContactsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "TRUSTED OFF-GRID PEERS",
+                        text = stringResource(R.string.trusted_peers_section),
                         style = AppleCaption2
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Verified peers with exchanged cryptographic keys. Reconnects automatically.",
+                        text = stringResource(R.string.trusted_peers_desc),
                         style = AppleFootnote,
                         color = AppleTextSecondary
                     )
@@ -2442,7 +2711,7 @@ fun ContactsScreen(
 
                     if (peers.isEmpty()) {
                         Text(
-                            text = "No saved contacts yet. Pair with nearby devices to exchange verified keys.",
+                            text = stringResource(R.string.no_saved_contacts),
                             style = AppleFootnote,
                             color = AppleTextTertiary,
                             modifier = Modifier.padding(vertical = 8.dp)
@@ -2476,9 +2745,9 @@ fun ContactsScreen(
                                     Column {
                                         Text(text = peer.name, style = AppleHeadline, fontSize = 14.sp)
                                         val contactStatus = when {
-                                            peer.isConnected && peer.isAuthenticated -> "Online • Secure Link"
-                                            peer.isConnected && !peer.isAuthenticated -> "Securing Link…"
-                                            else -> "Offline"
+                                            peer.isConnected && peer.isAuthenticated -> stringResource(R.string.contact_online_secure)
+                                            peer.isConnected && !peer.isAuthenticated -> stringResource(R.string.contact_securing)
+                                            else -> stringResource(R.string.offline)
                                         }
                                         val contactColor = when {
                                             peer.isConnected && peer.isAuthenticated -> AppleSystemGreen
@@ -2499,7 +2768,7 @@ fun ContactsScreen(
                                     }
                                     Icon(
                                         imageVector = Icons.Default.Verified,
-                                        contentDescription = "Verified Key",
+                                        contentDescription = stringResource(R.string.verified_key),
                                         tint = AppleSystemGreen,
                                         modifier = Modifier.size(16.dp)
                                     )
@@ -2546,10 +2815,10 @@ fun MessagesScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                 }
                 Text(
-                    text = "Messages",
+                    text = stringResource(R.string.messages),
                     style = AppleLargeTitle,
                     fontSize = 28.sp
                 )
@@ -2564,7 +2833,7 @@ fun MessagesScreen(
                         .padding(horizontal = 16.dp)
                 ) {
                     Text(
-                        text = "No active channel. Connect to a peer device to exchange encrypted off-grid text messages.",
+                        text = stringResource(R.string.no_active_channel_messages),
                         style = AppleFootnote,
                         color = AppleTextSecondary,
                         modifier = Modifier.padding(16.dp)
@@ -2596,12 +2865,12 @@ fun MessagesScreen(
                             }
                             Spacer(modifier = Modifier.height(14.dp))
                             Text(
-                                text = "No Messages Yet",
+                                text = stringResource(R.string.no_messages_yet),
                                 style = AppleHeadline
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Send encrypted text messages to your connected peers.",
+                                text = stringResource(R.string.send_encrypted_messages),
                                 style = AppleFootnote,
                                 color = AppleTextTertiary
                             )
@@ -2617,7 +2886,7 @@ fun MessagesScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(messages, key = { it.messageId }) { msg ->
-                            val isMine = msg.senderMemberId == viewModel.sessionIdForMessages
+                            val isMine = msg.isOutgoing
                             var actionsExpanded by remember(msg.messageId) { mutableStateOf(false) }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -2647,7 +2916,7 @@ fun MessagesScreen(
                                 ) {
                                     Column {
                                         Text(
-                                            text = if (isMine) "You" else msg.senderName,
+                                            text = if (isMine) stringResource(R.string.you) else msg.senderName,
                                             style = AppleCaption1,
                                             fontWeight = FontWeight.Bold,
                                             color = if (isMine) Color.White.copy(alpha = 0.85f) else Color(0xFFE60023)
@@ -2666,10 +2935,10 @@ fun MessagesScreen(
                                         ) {
                                             Text(
                                                 text = when (msg.status) {
-                                                    TextDeliveryStatus.SENDING -> "Sending…"
-                                                    TextDeliveryStatus.DELIVERED -> "Delivered"
-                                                    TextDeliveryStatus.FAILED -> "Failed"
-                                                } + if (!isMine && !msg.isRead) " • Unread" else "",
+                                                    TextDeliveryStatus.SENDING -> stringResource(R.string.sending)
+                                                    TextDeliveryStatus.DELIVERED -> stringResource(R.string.delivered)
+                                                    TextDeliveryStatus.FAILED -> stringResource(R.string.failed)
+                                                } + if (!isMine && !msg.isRead) " • ${stringResource(R.string.unread)}" else "",
                                                 style = AppleCaption1,
                                                 color = if (msg.status == TextDeliveryStatus.FAILED) AppleSystemRed else if (isMine) Color.White.copy(alpha = 0.7f) else AppleTextSecondary
                                             )
@@ -2680,15 +2949,15 @@ fun MessagesScreen(
                                                 ) { Text("•••", fontSize = 12.sp, color = if (isMine) Color.White.copy(alpha = 0.7f) else AppleTextSecondary) }
                                                 DropdownMenu(expanded = actionsExpanded, onDismissRequest = { actionsExpanded = false }) {
                                                     if (!isMine && !msg.isRead) DropdownMenuItem(
-                                                        text = { Text("Mark read") },
+                                                        text = { Text(stringResource(R.string.mark_read)) },
                                                         onClick = { actionsExpanded = false; viewModel.markTextMessageRead(msg.messageId) }
                                                     )
                                                     if (isMine && msg.status == TextDeliveryStatus.FAILED) DropdownMenuItem(
-                                                        text = { Text("Resend") },
+                                                        text = { Text(stringResource(R.string.resend)) },
                                                         onClick = { actionsExpanded = false; viewModel.resendTextMessage(msg.messageId) }
                                                     )
                                                     DropdownMenuItem(
-                                                        text = { Text("Delete") },
+                                                        text = { Text(stringResource(R.string.delete)) },
                                                         onClick = { actionsExpanded = false; viewModel.deleteTextMessage(msg.messageId) }
                                                     )
                                                 }
@@ -2712,7 +2981,7 @@ fun MessagesScreen(
                         value = draft,
                         onValueChange = { draft = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("TalkLoop Message • Offline", style = AppleFootnote, color = AppleTextTertiary) },
+                        placeholder = { Text(stringResource(R.string.message_placeholder), style = AppleFootnote, color = AppleTextTertiary) },
                         singleLine = true,
                         shape = RoundedCornerShape(22.dp),
                         textStyle = AppleBody.copy(color = AppleTextPrimary),
@@ -2745,7 +3014,7 @@ fun MessagesScreen(
                         modifier = Modifier.size(46.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {
-                        Icon(Icons.Default.ArrowUpward, contentDescription = "Send", tint = Color.White, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.ArrowUpward, contentDescription = stringResource(R.string.send), tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                 }
             }
@@ -2763,8 +3032,13 @@ fun CreateChannelScreen(
     onNavigateToNearby: () -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val isOutdoorMode by viewModel.isOutdoorMode.collectAsState()
     var channelName by remember { mutableStateOf("") }
+    val generatedChannelName = stringResource(
+        R.string.default_channel_name,
+        (System.currentTimeMillis() % 1000).toString()
+    )
 
     Box(
         modifier = Modifier
@@ -2779,10 +3053,10 @@ fun CreateChannelScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                 }
                 Text(
-                    text = "Create Channel",
+                    text = stringResource(R.string.create_channel),
                     style = AppleTitle2
                 )
             }
@@ -2796,14 +3070,14 @@ fun CreateChannelScreen(
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
                     Text(
-                        text = "CHANNEL NAME",
+                        text = stringResource(R.string.channel_name_label),
                         style = AppleCaption2
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = channelName,
                         onValueChange = { channelName = it },
-                        placeholder = { Text("e.g. Field Operations Alpha", style = AppleFootnote) },
+                        placeholder = { Text(stringResource(R.string.channel_name_example), style = AppleFootnote) },
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -2819,7 +3093,7 @@ fun CreateChannelScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "You will host this talk channel. Nearby devices can scan and join directly.",
+                        text = stringResource(R.string.create_channel_desc),
                         style = AppleFootnote,
                         color = AppleTextSecondary
                     )
@@ -2830,7 +3104,7 @@ fun CreateChannelScreen(
 
             Button(
                 onClick = {
-                    val name = channelName.ifBlank { "Channel ${System.currentTimeMillis() % 1000}" }
+                    val name = channelName.ifBlank { generatedChannelName }
                     viewModel.createChannel(name)
                     viewModel.startNearby()
                     onNavigateToNearby()
@@ -2846,7 +3120,7 @@ fun CreateChannelScreen(
             ) {
                 Icon(Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Create & Broadcast Channel", fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.create_broadcast_channel), fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -2858,8 +3132,10 @@ fun JoinChannelScreen(
     onNavigateToNearby: () -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val isOutdoorMode by viewModel.isOutdoorMode.collectAsState()
     var shortCode by remember { mutableStateOf("") }
+    val defaultChannelName = stringResource(R.string.default_channel_name, shortCode)
 
     Box(
         modifier = Modifier
@@ -2874,10 +3150,10 @@ fun JoinChannelScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = AppleTextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back), tint = AppleTextPrimary)
                 }
                 Text(
-                    text = "Join Channel",
+                    text = stringResource(R.string.join_channel_title),
                     style = AppleTitle2
                 )
             }
@@ -2891,14 +3167,14 @@ fun JoinChannelScreen(
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
                     Text(
-                        text = "CHANNEL SHORT CODE",
+                        text = stringResource(R.string.channel_short_code_label),
                         style = AppleCaption2
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = shortCode,
                         onValueChange = { shortCode = it.uppercase().take(6) },
-                        placeholder = { Text("6-character code", style = AppleFootnote) },
+                        placeholder = { Text(stringResource(R.string.short_code_placeholder), style = AppleFootnote) },
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -2914,7 +3190,7 @@ fun JoinChannelScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Ask the host for the 6-character code, or scan nearby to discover open channels.",
+                        text = stringResource(R.string.join_channel_desc),
                         style = AppleFootnote,
                         color = AppleTextSecondary
                     )
@@ -2925,7 +3201,7 @@ fun JoinChannelScreen(
 
             Button(
                 onClick = {
-                    viewModel.setChannelName("Channel $shortCode")
+                    viewModel.setChannelName(defaultChannelName)
                     viewModel.startNearby()
                     onNavigateToNearby()
                 },
@@ -2940,7 +3216,7 @@ fun JoinChannelScreen(
             ) {
                 Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Join with Code", fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.join_with_code), fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -2958,7 +3234,7 @@ fun JoinChannelScreen(
             ) {
                 Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFFE60023), modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Scan Nearby Instead", color = AppleTextPrimary, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.scan_nearby_instead), color = AppleTextPrimary, fontWeight = FontWeight.SemiBold)
             }
         }
     }

@@ -115,7 +115,7 @@ class WalkieTalkieForegroundService : Service() {
             }
             NotificationController.ACTION_TOGGLE_PTT -> {
                 onPttToggleFromNotification?.invoke()
-                return START_STICKY
+                return START_NOT_STICKY
             }
             NotificationController.ACTION_LEAVE -> {
                 onLeaveFromNotification?.invoke()
@@ -123,13 +123,19 @@ class WalkieTalkieForegroundService : Service() {
                 return START_NOT_STICKY
             }
             NotificationController.ACTION_START, null -> {
-                startServiceInternal(intent)
+                // Transport and session state currently live in the ViewModel.
+                // A sticky process restart cannot restore an authenticated link.
+                if (intent == null || onLeaveFromNotification == null) {
+                    stopServiceInternal()
+                    return START_NOT_STICKY
+                }
+                if (!startServiceInternal(intent)) return START_NOT_STICKY
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
-    private fun startServiceInternal(intent: Intent?) {
+    private fun startServiceInternal(intent: Intent?): Boolean {
         val sessionName = intent?.getStringExtra(NotificationController.EXTRA_SESSION_NAME)
             ?: "Field Ops Alpha"
         val status = intent?.getStringExtra(NotificationController.EXTRA_STATUS)
@@ -152,14 +158,18 @@ class WalkieTalkieForegroundService : Service() {
             try {
                 startForeground(NotificationController.NOTIFICATION_ID, notification, serviceType)
             } catch (e: Exception) {
-                try {
-                    startForeground(NotificationController.NOTIFICATION_ID, notification)
-                } catch (e2: Exception) {}
+                Log.e(TAG, "Unable to promote session service to foreground", e)
+                stopServiceInternal()
+                return false
             }
         } else {
             try {
                 startForeground(NotificationController.NOTIFICATION_ID, notification)
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "Unable to promote session service to foreground", e)
+                stopServiceInternal()
+                return false
+            }
         }
 
         if (!isRunning) {
@@ -170,6 +180,7 @@ class WalkieTalkieForegroundService : Service() {
                 // Ignore wake lock acquire failures
             }
         }
+        return true
     }
 
     private fun stopServiceInternal() {

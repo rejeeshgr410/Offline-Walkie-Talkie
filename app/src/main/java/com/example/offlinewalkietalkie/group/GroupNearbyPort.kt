@@ -13,7 +13,8 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class GroupNearbyPort(
     private val transport: TransportManager,
-    private val sessionId: Long
+    private val sessionId: Long,
+    private val sendAdmissionSecret: suspend (String, ByteArray) -> Unit
 ) : GroupTransportPort {
 
     companion object {
@@ -43,6 +44,12 @@ class GroupNearbyPort(
     }
 
     override suspend fun sendControl(endpointId: String, payload: ByteArray) {
+        // Membership proofs authenticate themselves and bootstrap a verified
+        // neighbor. Every state-changing control packet requires link AEAD.
+        if (GroupMessage.decode(payload) !is GroupMessage.MembershipProof) {
+            sendAdmissionSecret(endpointId, payload)
+            return
+        }
         val frame = Frame(
             type = FrameType.GROUP_CONTROL,
             sessionId = sessionId,

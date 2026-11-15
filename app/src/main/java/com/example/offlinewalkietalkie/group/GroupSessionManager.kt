@@ -73,6 +73,17 @@ class GroupSessionManager(
 
     /** Shared by every member once admitted; never leaves an accepted, code-checked link. */
     private var groupSecret: ByteArray? = null
+    private var voiceSecret: ByteArray? = null
+    private var lastVoiceRoster: Set<String> = emptySet()
+    private var voiceEpoch = 0L
+    /** Set before joining. Relay-only participants receive membership proof material, never audio keys. */
+    var relayOnly: Boolean = false
+        private set
+
+    fun setRelayOnlyJoining(enabled: Boolean) {
+        check(!_state.value.isInGroup) { "Leave the current group before changing relay role" }
+        relayOnly = enabled
+    }
 
     /** memberId -> when the in-flight connection attempt started. */
     private val attemptStartedAt = mutableMapOf<String, Long>()
@@ -100,11 +111,79 @@ class GroupSessionManager(
 
     val holdsGroupSecret: Boolean get() = groupSecret != null
 
+    fun recoveryCheckpoint(): String? {
+        val snapshot = _state.value
+        val group = snapshot.group ?: return null
+        val secret = groupSecret ?: return null
+        return org.json.JSONObject().put("local", localMemberId).put("group", group.groupId)
+            .put("name", group.name).put("coordinator", group.coordinatorId).put("epoch", group.epoch)
+            .put("secret", java.util.Base64.getEncoder().encodeToString(secret))
+            .put("relayOnly", relayOnly)
+            .put("voiceEpoch", voiceEpoch)
+            .put("voice", voiceSecret?.let { java.util.Base64.getEncoder().encodeToString(it) }.orEmpty())
+            .put("members", org.json.JSONArray().apply {
+                snapshot.members.filter { it.onRoster }.forEach { member -> put(org.json.JSONObject()
+                    .put("id", member.memberId).put("name", member.displayName).put("relayOnly", member.relayOnly)) }
+            }).toString()
+    }
+
+    /** Restored members must establish new radio links and prove membership again. */
+    suspend fun restoreCheckpoint(json: String): Boolean {
+        val restored = runCatching {
+            val data = org.json.JSONObject(json)
+            require(data.getString("local") == localMemberId)
+            val secret = java.util.Base64.getDecoder().decode(data.getString("secret"))
+            require(secret.size == GroupProof.SECRET_BYTES)
+            val group = GroupIdentity(data.getString("group"), data.getString("name"),
+                data.getString("coordinator"), data.getInt("epoch"))
+            val rows = data.getJSONArray("members")
+            require(rows.length() in 1..64)
+            val members = (0 until rows.length()).map { index ->
+                val row = rows.getJSONObject(index)
+                val id = row.getString("id")
+                GroupMember(id, row.getString("name"), onRoster = true,
+                    relayOnly = row.optBoolean("relayOnly"),
+                    role = if (id == group.coordinatorId) GroupRole.COORDINATOR else GroupRole.MEMBER,
+                    state = if (id == localMemberId) MemberState.CONNECTED else MemberState.DISCOVERED)
+            }
+            require(members.any { it.memberId == localMemberId })
+            Triple(group, members, secret)
+        }.getOrNull() ?: return false
+        resetLinkTracking()
+        lastVoiceRoster = emptySet()
+        groupSecret = restored.third
+        val data = org.json.JSONObject(json)
+        relayOnly = data.optBoolean("relayOnly")
+        voiceEpoch = data.optLong("voiceEpoch")
+        voiceSecret = if (relayOnly) null else data.optString("voice").takeIf { it.isNotBlank() }
+            ?.let { runCatching { java.util.Base64.getDecoder().decode(it) }.getOrNull() }?.takeIf { it.size == 32 }
+        _state.value = GroupState(group = restored.first, localMemberId = localMemberId,
+            members = restored.second, isForming = true)
+        lastCoordinatorBeatAt = now()
+        hasSyncedWithCoordinator = false
+        publishAdvert()
+        return true
+    }
+
+    /** Only admitted members hold this secret. Bind voice encryption to this group epoch. */
+    fun channelEncryptionKey(): ByteArray? {
+        val identity = _state.value.group ?: return null
+        return voiceSecret?.let {
+            com.example.offlinewalkietalkie.crypto.TinkCryptoEngine().deriveChannelKey(
+                it, "${identity.groupId}:${identity.epoch}".toByteArray(Charsets.UTF_8)
+            )
+        }
+    }
+
     // ---------------------------------------------------------------- group lifecycle
 
     /** Become the coordinator of a brand new group. */
     suspend fun createGroup(name: String) {
         resetLinkTracking()
+        voiceEpoch = 0
+        lastVoiceRoster = emptySet()
+        relayOnly = false
+        voiceSecret = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
         groupSecret = secretFactory()
         val group = GroupIdentity(
             groupId = idFactory(GroupAdvert.GROUP_ID_LENGTH),
@@ -137,6 +216,9 @@ class GroupSessionManager(
      */
     suspend fun joinGroup(advert: GroupAdvert, endpointId: String) {
         resetLinkTracking()
+        voiceEpoch = 0
+        lastVoiceRoster = emptySet()
+        voiceSecret = null
         groupSecret = null
         val group = GroupIdentity(
             groupId = advert.groupId,
@@ -185,6 +267,7 @@ class GroupSessionManager(
         transport.clearAdvert()
         groupSecret = null
         hasSyncedWithCoordinator = false
+        voiceSecret = null
         _state.value = GroupState(localMemberId = localMemberId)
     }
 
@@ -333,7 +416,7 @@ class GroupSessionManager(
             } else if (memberId == group.coordinatorId) {
                 lastCoordinatorBeatAt = now()
                 hasSyncedWithCoordinator = true
-                sendControl(endpointId, GroupMessage.JoinRequest(localMemberId, localDisplayName))
+                sendControl(endpointId, GroupMessage.JoinRequest(localMemberId, localDisplayName, relayOnly))
             }
             return
         }
@@ -451,10 +534,14 @@ class GroupSessionManager(
         if (message.groupId != group.groupId) return
         if (message.epoch < group.epoch) return
         // The secret only counts when it arrives on the code-checked link to the coordinator.
-        if (!sender.humanVerified || sender.memberId != message.coordinatorId) return
+        if ((!sender.humanVerified && !sender.state.isLive) || sender.memberId != message.coordinatorId) return
         val secret = GroupProof.fromHex(message.secretHex) ?: return
 
         groupSecret = secret
+        if (!relayOnly && message.voiceKeyHex != null && message.voiceEpoch >= voiceEpoch) {
+            voiceSecret = GroupProof.fromHex(message.voiceKeyHex)?.takeIf { it.size == 32 }
+            voiceEpoch = message.voiceEpoch
+        }
         _state.value = _state.value.copy(
             group = group.copy(
                 name = message.groupName,
@@ -474,9 +561,15 @@ class GroupSessionManager(
         val member = _state.value.memberByEndpoint(endpointId) ?: return
         // Only a link a person confirmed may add someone to the roster.
         if (!member.humanVerified || member.memberId != message.memberId) return
+        if (member.onRoster && member.relayOnly != message.relayOnly) return
+        val group = _state.value.group ?: return
+        val secret = groupSecret ?: return
+        sendControl(endpointId, GroupMessage.Welcome(group.groupId, group.name, group.coordinatorId,
+            group.epoch, secret.toHex(), if (message.relayOnly) null else voiceSecret?.toHex(), voiceEpoch))
         updateMember(message.memberId) {
             it?.copy(
                 displayName = message.displayName,
+                relayOnly = message.relayOnly,
                 onRoster = true,
                 state = MemberState.CONNECTED,
                 lastSeenEpochMs = now()
@@ -502,6 +595,7 @@ class GroupSessionManager(
                 (current ?: GroupMember(entry.memberId, entry.displayName)).copy(
                     displayName = entry.displayName,
                     role = entry.role,
+                    relayOnly = entry.relayOnly,
                     onRoster = true,
                     // A roster listing is not a link; only mark live if we already had one.
                     state = current?.state ?: MemberState.DISCOVERED,
@@ -539,6 +633,7 @@ class GroupSessionManager(
      */
     private suspend fun applyCoordinatorClaim(message: GroupMessage.CoordinatorClaim) {
         val group = _state.value.group ?: return
+        if (_state.value.member(message.memberId)?.relayOnly == true) return
         if (message.groupId != group.groupId) return
         if (_state.value.member(message.memberId)?.onRoster != true &&
             message.memberId != localMemberId
@@ -665,6 +760,7 @@ class GroupSessionManager(
     }
 
     private suspend fun checkCoordinatorLiveness(current: Long) {
+        if (relayOnly) return
         val snapshot = _state.value
         val group = snapshot.group ?: return
         if (snapshot.isCoordinator) return
@@ -675,7 +771,7 @@ class GroupSessionManager(
         if (current - lastCoordinatorBeatAt <= COORDINATOR_TIMEOUT_MS) return
 
         // Only the lowest surviving id claims, so the group does not fragment.
-        val candidates = (snapshot.connected.map { it.memberId } + localMemberId)
+        val candidates = (snapshot.connected.filterNot { it.relayOnly }.map { it.memberId } + localMemberId)
             .filter { it != group.coordinatorId }
             .sorted()
         if (candidates.firstOrNull() != localMemberId) return
@@ -787,7 +883,19 @@ class GroupSessionManager(
 
         val entries = snapshot.members
             .filter { it.memberId == localMemberId || (it.onRoster && it.state.isLive) }
-            .map { RosterEntry(it.memberId, it.displayName, it.role) }
+            .map { RosterEntry(it.memberId, it.displayName, it.role, it.relayOnly) }
+        val membership = entries.map { "${it.memberId}:${it.relayOnly}" }.toSet()
+        if (membership != lastVoiceRoster) {
+            voiceSecret = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+            voiceEpoch++
+            lastVoiceRoster = membership
+        }
+        val secret = groupSecret ?: return
+        snapshot.connected.forEach { member ->
+            member.endpointId?.let { sendControl(it, GroupMessage.Welcome(group.groupId, group.name,
+                group.coordinatorId, group.epoch, secret.toHex(),
+                if (member.relayOnly) null else voiceSecret?.toHex(), voiceEpoch)) }
+        }
         val roster = GroupMessage.Roster(group.groupId, group.epoch, entries)
         snapshot.connected.forEach { member ->
             member.endpointId?.let { sendControl(it, roster) }

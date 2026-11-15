@@ -23,6 +23,17 @@ fun MainNavigation(viewModel: WalkieTalkieViewModel = viewModel()) {
     val isOutdoorMode by viewModel.isOutdoorMode.collectAsState()
     val pendingRequest by viewModel.pendingRequest.collectAsState()
 
+    // Root tabs may be restored by Navigation3 after a process restart and a
+    // fast repeated tap can also leave duplicate route entries. Popping only
+    // one entry would then appear to make the visible Back button do nothing.
+    // Always collapse root-tab detail screens to the canonical Home route.
+    fun returnHome() {
+        while (backStack.isNotEmpty() && backStack.lastOrNull() != Home) {
+            backStack.removeLastOrNull()
+        }
+        if (backStack.isEmpty()) backStack.add(Home)
+    }
+
     LaunchedEffect(pendingRequest) {
         if (pendingRequest != null && !backStack.contains(Pairing)) {
             backStack.add(Pairing)
@@ -57,9 +68,9 @@ fun MainNavigation(viewModel: WalkieTalkieViewModel = viewModel()) {
                             }
                         },
                         onNavigateToPairing = { backStack.add(Pairing) },
-                        onNavigateToSettings = { backStack.add(Settings) },
-                        onNavigateToContacts = { backStack.add(Contacts) },
-                        onNavigateToMessages = { backStack.add(Messages) },
+                        onNavigateToSettings = { if (!backStack.contains(Settings)) backStack.add(Settings) },
+                        onNavigateToContacts = { if (!backStack.contains(Contacts)) backStack.add(Contacts) },
+                        onNavigateToMessages = { if (!backStack.contains(Messages)) backStack.add(Messages) },
                         onNavigateToCreateChannel = { backStack.add(GroupLobby) },
                         onNavigateToJoinChannel = { backStack.add(GroupLobby) },
                         onNavigateToRadar = { backStack.add(RadarCompass) },
@@ -90,19 +101,19 @@ fun MainNavigation(viewModel: WalkieTalkieViewModel = viewModel()) {
                     SettingsScreen(
                         viewModel = viewModel,
                         onOpenOfflineMaps = { backStack.add(OfflineMaps) },
-                        onBack = { backStack.removeLastOrNull() }
+                        onBack = { returnHome() }
                     )
                 }
                 entry<Contacts> {
                     ContactsScreen(
                         viewModel = viewModel,
-                        onBack = { backStack.removeLastOrNull() }
+                        onBack = { returnHome() }
                     )
                 }
                 entry<Messages> {
                     MessagesScreen(
                         viewModel = viewModel,
-                        onBack = { backStack.removeLastOrNull() }
+                        onBack = { returnHome() }
                     )
                 }
                 entry<GroupLobby> {
